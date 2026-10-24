@@ -1,12 +1,12 @@
-"""Download the Guelph Sidewalks GeoJSON from the City's ArcGIS service.
+"""Download the Guelph Bike Facilities GeoJSON from the City's ArcGIS service.
 
-The buildings layer's download, made to page. The Sidewalks service caps a
-reply at maxRecordCount = 1,000 rows and the layer has ~5,245, so the query is
+The sidewalks layer's download. The service caps a reply at maxRecordCount =
+1,000 rows and the layer has ~1,514, so the query is
 issued page by page (resultOffset / resultRecordCount, ordered by OBJECTID so
 the pages cannot overlap or skip) and the pages are assembled into one
 FeatureCollection. The total is checked against the service's own
 returnCountOnly answer before anything is saved: a page lost in transit would
-otherwise drop a stretch of sidewalk from the overlay and add it to nothing.
+otherwise drop a stretch of bike lane from the overlay and add it to nothing.
 
 An ArcGIS `/query` endpoint has no Last-Modified worth reading -- it is
 generated per request -- so what is compared between runs is a **sha256 of
@@ -29,14 +29,14 @@ from addressvault import net
 
 from src import config
 
-# The layer is ~6 pages of ~1 MB each -- a retry costs seconds when the link
+# The layer is 2 pages of under 1 MB each -- a retry costs seconds when the link
 # is healthy and buys back a week when it is not.
 RETRIES = 3
 RETRY_WAIT = 30
 
 
 def download(force=False):
-    """Download the latest Sidewalks GeoJSON.
+    """Download the latest Bike Facilities GeoJSON.
 
     Returns (status, filepath) where status is "DOWNLOADED" or "SKIPPED".
     Raises ``net.LinkUnavailable`` when the host has no usable link: nothing was
@@ -50,7 +50,7 @@ def download(force=False):
     # a wait would be killed mid-sleep -- retrying is the scheduler's job.
     net.wait_for_link(wait=False)
 
-    print("Querying the Sidewalks FeatureServer ...")
+    print("Querying the Bike Facilities FeatureServer ...")
     expected = _count()
     features = []
     while True:
@@ -78,7 +78,7 @@ def download(force=False):
 
     # No server-side edit date exists on this service (editingInfo is null),
     # so the file is dated by the day the change was first seen here.
-    filename = f"sidewalks-{date.today().isoformat()}.geojson"
+    filename = f"{config.DOWNLOAD_PREFIX}{date.today().isoformat()}.geojson"
     filepath = os.path.join(config.DATA_DIR, filename)
     with open(filepath, "wb") as f:
         f.write(body)

@@ -1,13 +1,14 @@
-"""Configuration constants for the Guelph sidewalks tile layer build.
+"""Configuration constants for the Guelph bike facilities tile layer build.
 
 Single source of truth. No logic here.
 
-Sibling of guelph-buildings-layer, and cloned from it: the same pipeline
-(download -> slim -> compare -> vector + raster -> site -> publish), pointed at
-the City of Guelph Sidewalks layer. What changes is the geometry: these are
-lines, the first line layer in the family, so the comparison samples each City
-sidewalk every few metres and asks how much of it has an OSM line beside it,
-rather than testing one polygon against another.
+Cloned from guelph-sidewalks-layer, the family's first line layer: the same
+pipeline (download -> slim -> compare -> vector + raster -> site -> publish),
+pointed at the City of Guelph Bike Facilities layer. What changes is what a
+match means. A painted lane is not a line of its own in OSM but a tag on the
+road beside it, on one side, so the comparison reads the road's cycleway tag
+for the side the City line lies on. Off-road paths are matched as lines, and
+signed routes against OSM's bicycle route relations.
 """
 
 import os
@@ -19,26 +20,25 @@ SITE_DIR = os.path.join(BUILD_DIR, "site")
 ASSETS_DIR = os.path.join(PROJECT_DIR, "assets")
 LOGS_DIR = os.path.join(PROJECT_DIR, "logs")
 
-MBTILES_PATH = os.path.join(BUILD_DIR, "sidewalks.mbtiles")
-SLIM_PATH = os.path.join(DATA_DIR, "sidewalks-slim.geojsonl")
-COUNT_PATH = os.path.join(DATA_DIR, "sidewalks.count.json")
+MBTILES_PATH = os.path.join(BUILD_DIR, "bike.mbtiles")
+SLIM_PATH = os.path.join(DATA_DIR, "bike-slim.geojsonl")
+COUNT_PATH = os.path.join(DATA_DIR, "bike.count.json")
 LAST_DOWNLOAD_PATH = os.path.join(DATA_DIR, ".last-download.json")
+# Downloaded files are named f"{DOWNLOAD_PREFIX}{date}.geojson".
+DOWNLOAD_PREFIX = "bike-"
 
 VECTOR_TILE_DIR = os.path.join(SITE_DIR, "tiles", "vector")
 RASTER_TILE_DIR = os.path.join(SITE_DIR, "tiles", "raster")
 
-# Data source: City of Guelph Sidewalks (OpenData2 layer 0), ~5,245 lines,
-# ~720 km. maxRecordCount is 1,000, so unlike the buildings layer the download
-# pages through it. The service stores geometry in EPSG:26917, so outSR=4326
-# is not optional -- without it every downstream lon/lat is UTM metres.
+# Data source: City of Guelph Bike Facilities (OpenData2 layer 1), 1,514 lines
+# on 2026-10-24. maxRecordCount is 1,000, so the download pages through it.
+# The service stores geometry in EPSG:26917, so outSR=4326 is not optional.
 FEATURE_SERVER = (
     "https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData2"
-    "/FeatureServer/0"
+    "/FeatureServer/1"
 )
 QUERY_URL = f"{FEATURE_SERVER}/query"
 PAGE_SIZE = 1000
-# The catalogue entry on explore.guelph.ca has no stable item page for this
-# layer, so the FeatureServer URL is what a reader is pointed at.
 DATASET_PAGE = FEATURE_SERVER
 # This layer REDISTRIBUTES City data as published tiles, and the licence
 # attaches a required attribution to that. It is carried on every page. See
@@ -58,8 +58,8 @@ ATTRIBUTION = (
 # GitHub Pages target. PAGES_URL carries NO trailing slash: every tile URL on
 # the site is built as f"{PAGES_URL}/tiles/...", and that string is the one
 # thing on the page a reader copies verbatim into their editor.
-GITHUB_REPO = "guelph-maps/guelph-sidewalks-layer"
-PAGES_URL = "https://guelph-maps.github.io/guelph-sidewalks-layer"
+GITHUB_REPO = "guelph-maps/guelph-bike-layer"
+PAGES_URL = "https://guelph-maps.github.io/guelph-bike-layer"
 
 # WSL distro that has tippecanoe installed (see wsl-setup.md). Used on Windows
 # only; elsewhere tippecanoe is run directly.
@@ -69,62 +69,86 @@ WSL_DISTRO = "Ubuntu"
 # tiles must be generated natively through the zooms used for mapping.
 VECTOR_MINZOOM = 14
 VECTOR_MAXZOOM = 19
-VECTOR_LAYER_NAME = "sidewalks"
+VECTOR_LAYER_NAME = "bike"
 
-# Raster tiles. Editors overzoom the top zoom further. z18 is where a sidewalk
-# and its curb are far enough apart on imagery to trace one and not the other.
-RASTER_ZOOMS = [15, 16, 17, 18]
+# Raster tiles. z14 shows the network a neighbourhood at a time; by z17 the
+# two lanes of a street (4-10 m either side of its centreline) are separate
+# strokes. Editors overzoom z17 further.
+RASTER_ZOOMS = [14, 15, 16, 17]
 
-# Source property keys read from the Sidewalks GeoJSON.
-ID_KEY = "SIDEWALKID"        # the City's sidewalk id
-STATUS_KEY = "STATUS"        # BUILT / PROPOSED / REQUIRED
-SURFACE_KEY = "SURFTYPE"     # CONCRETE on ~99% of the built length
-WIDTH_KEY = "WIDTH"          # e.g. "1.52m (5'-0\")"
-INSTALL_KEY = "INSTALLDATE"  # epoch milliseconds, often null
-ACCURACY_KEY = "DATACAPTUREACCURACY"  # "1 TO 5 METRES" on nearly every row
+# Source property keys read from the Bike Facilities GeoJSON.
+ID_KEY = "BIKEFACILITYID"    # the City's facility id; rises with each new row
+STATUS_KEY = "STATUS"        # In Service / Planned / Out of Service
+TYPE_KEY = "FACILITYTYPE"    # Bike Lane, MUP, Signed Route, Cycle Track, ...
+ONROAD_KEY = "ONROAD"        # Yes / No
+BUFFER_KEY = "BUFFERTYPE"    # None, Painted, Curbed, Barrier and Bollard, ...
+YEAR_KEY = "INSTALLYEAR"     # a plain integer year, on every row
+WIDTH_KEY = "FACILITYWIDTH"  # metres
+SIGNED_KEY = "SIGNED"        # Yes / No
+STREET_KEY = "STREETNAME"
 
-# Only BUILT sidewalks are gaps in their own right. PROPOSED and REQUIRED rows
-# (14 on 2026-10-09) are drawn dashed on the overlay and, when OSM has nothing
-# there, filed under "proposed" on the gap page, off by default: a mapper
-# should not trace a sidewalk that may not have been poured.
-BUILT_STATUS = "BUILT"
+IN_SERVICE = "In Service"
+PLANNED = "Planned"
+
+# What each City row is, for drawing and for matching. Derived in slim.py
+# from FACILITYTYPE and BUFFERTYPE:
+#   painted    a lane with no physical buffer
+#   buffered   a painted buffer or rumble strip between lane and traffic
+#   separated  a cycle track, or a lane behind a curb, bollards or a barrier
+#   mup        an off-road multi-use path
+#   route      a signed route on a shared road
+#   spot       a crossride, intersection treatment or curb cut -- no settled
+#              OSM tag, so shown and never counted
+SPOT_TYPES = ("Crossride", "Bike Lane - Intersection", "Left-Turn Curb Cut",
+              "Other")
+LANE_TYPES = ("Bike Lane", "Bike Lane - Green", "Contraflow", "Cycle Track")
+SEPARATED_BUFFERS = ("Curbed", "Rolled Curb", "Barrier", "Bollard",
+                     "Barrier and Bollard")
+PAINTED_BUFFERS = ("Painted", "Rumble Strip")
 
 # --- OSM comparison (gap-review page) ---
-# Every City sidewalk is sampled every SAMPLE_STEP_M metres. A sample is
-# covered when, within MATCH_M, OSM has a footway=sidewalk way, else any other
-# pedestrian line (a plain footway, path, cycleway, ...), or, within
-# ROAD_TAG_M, a road carrying a positive sidewalk=* tag. compare.py turns the
-# samples into one status per City segment; its docstring has the rule.
-#
-# 15 m is the recalibration's headline radius (2026-10-09): the City states
-# 1-5 m accuracy on 5,241 of its 5,245 rows, and a 15 m radius absorbs that
-# and an OSM sidewalk traced a few metres off. FAR_M is the band beyond it
-# where a City offset, not a missing way, is the likelier explanation.
+# Every City line is sampled every SAMPLE_STEP_M metres, and each sample asks
+# what OSM has beside it. compare.py's docstring has the rule in full.
 SAMPLE_STEP_M = 5.0
-MATCH_M = 15.0
-FAR_M = 25.0
-ROAD_TAG_M = 20.0
-# Beyond this, nothing in OSM is anywhere near: reported as its own figure,
-# the part of the gap no alignment argument can explain away.
-REMOTE_M = 50.0
-# A segment is matched at >=70% covered, partial at 20-70%, and the rest is a
-# gap -- "missing", "far" or "road_says_no" by what the uncovered part has
-# near it.
+# On-road lanes: the City draws a lane line 4-10 m off the road centreline
+# (p95 9.5 m in the recalibration), so the road that carries its tag is the
+# nearest within ROAD_M. Closer than SIDE_MIN_M, the side cannot be read.
+ROAD_M = 20.0
+SIDE_MIN_M = 1.5
+# A separately mapped cycleway within this far stands in for a road tag.
+BIKEWAY_M = 12.0
+# Off-road paths and cycle tracks: any path-like OSM way within this far.
+PATH_M = 15.0
+# Signed routes: a member way of a route=bicycle relation within this far.
+ROUTE_M = 15.0
+# At an intersection the nearest road can be the cross street. A candidate
+# only counts when its direction agrees with the City line's within this many
+# degrees; with none agreeing, the sample has no road.
+BEARING_MAX_DEG = 30.0
+# Segment bands, length-weighted: covered >= MATCHED_SHARE is in OSM.
 MATCHED_SHARE = 0.70
-PARTIAL_SHARE = 0.20
-# Gap segments are attributed to the nearest named OSM road within this far,
-# so the page can lead with streets. The recalibration found every metre of
-# the missing length within 25 m of a mapped road.
+# Shorter than this (untraced metres for a gap, length for nosep / nobike),
+# a segment is not listed. The City cuts protected intersections into 5-15 m
+# corner pieces, and a corner's nearest road is the cross street whichever
+# way it points.
+MIN_LISTED_M = 15.0
+# A matched lane with a physical City buffer is "nosep" when at least this
+# share of its matched length has no separation/buffer tag on its side.
+NOSEP_SHARE = 0.5
+# Listed segments are named after the nearest named OSM road within this far
+# (the City's own STREETNAME is the fallback).
 STREET_M = 40.0
-# A street is listed in the headline count when at least this much of its
-# City sidewalk has no OSM line within MATCH_M.
-STREET_MIN_KM = 0.2
+# "new": a gap whose City install year is this recent (current year minus
+# NEW_YEARS or later). INSTALLYEAR is a year, not a date, so "installed in
+# the last twelve months" can only be read as this year or last.
+NEW_YEARS = 1
 
-# OSM highway values read as roads (a positive or negative sidewalk=* on one
-# of these speaks for the sidewalk beside it) and as pedestrian lines.
+# OSM highway values read as roads that can carry a lane tag. Service roads
+# are left out: a parking aisle beside an arterial would otherwise be the
+# "nearest road" for the lane on that side.
 ROAD_HIGHWAYS = (
     "motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
-    "residential", "living_street", "service", "road", "busway",
+    "residential", "living_street", "road", "busway",
     "motorway_link", "trunk_link", "primary_link", "secondary_link",
     "tertiary_link",
 )
@@ -148,12 +172,16 @@ OVERPASS_ROUNDS = 3
 OVERPASS_ROUND_WAIT = 60
 # Floor on a reply's element count. A regional instance answers an
 # out-of-region bbox with a valid EMPTY result, and taking that at face value
-# reports every City sidewalk as missing from OSM. About half the first live
-# reply: 30,494 ways from overpass-api.de on 2026-10-09.
-OSM_MIN_ELEMENTS = 15000
+# reports every City facility as missing from OSM. About half the first live
+# reply: 18,099 elements from overpass-api.de on 2026-10-24.
+OSM_MIN_ELEMENTS = 9000
+# And on its bicycle route relations, which every signed route is matched
+# against: 17 on 2026-10-24. A reply without them would report every signed
+# route as unsigned.
+OSM_MIN_ROUTES = 8
 OSM_MAX_AGE_DAYS = 3
 # Overpass rejects the default requests User-Agent (HTTP 406); identify the tool.
-USER_AGENT = "guelph-sidewalks-layer/0.1 (toronto@comentality.com)"
+USER_AGENT = "guelph-bike-layer/0.1 (toronto@comentality.com)"
 # Guelph bounding box (S, W, N, E), verbatim from guelph-beholder's config.toml
 # -- a touch larger than the city. OSM ways outside the city simply match
 # nothing, so a loose box is harmless.

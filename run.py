@@ -1,4 +1,4 @@
-"""CLI entry point for the Guelph sidewalks tile layer build."""
+"""CLI entry point for the Guelph bike facilities tile layer build."""
 
 import argparse
 import os
@@ -109,24 +109,24 @@ def cmd_update(args):
 
 
 def _latest_geojson():
-    """Return the newest downloaded Sidewalks GeoJSON in data/."""
+    """Return the newest downloaded Bike Facilities GeoJSON in data/."""
     if not os.path.isdir(config.DATA_DIR):
         raise RuntimeError("No data/ directory. Run 'download' first.")
     files = sorted(
         f for f in os.listdir(config.DATA_DIR)
-        if f.startswith("sidewalks-") and f.endswith(".geojson")
+        if f.startswith(config.DOWNLOAD_PREFIX) and f.endswith(".geojson")
     )
     if not files:
-        raise RuntimeError("No Sidewalks GeoJSON in data/. Run 'download' first.")
+        raise RuntimeError("No Bike Facilities GeoJSON in data/. Run 'download' first.")
     return os.path.join(config.DATA_DIR, files[-1])
 
 
 COMMANDS = {
-    "download": (cmd_download, "Download the latest Sidewalks GeoJSON"),
-    "slim": (cmd_slim, "Reduce the sidewalks to a slim GeoJSONL"),
-    "compare": (cmd_compare, "Compare City sidewalks against OSM -> gaps.geojson"),
+    "download": (cmd_download, "Download the latest Bike Facilities GeoJSON"),
+    "slim": (cmd_slim, "Reduce the facilities to a slim GeoJSONL"),
+    "compare": (cmd_compare, "Compare City facilities against OSM -> gaps.geojson"),
     "vector": (cmd_vector, "Build vector (MVT) tiles via tippecanoe"),
-    "raster": (cmd_raster, "Build outline raster (PNG) tiles"),
+    "raster": (cmd_raster, "Build line raster (PNG) tiles"),
     "site": (cmd_site, "Render the GitHub Pages landing page"),
     "publish": (cmd_publish, "Force-push the site to the gh-pages branch"),
     "build": (cmd_build, "download + slim + compare + vector + raster + site"),
@@ -136,7 +136,7 @@ COMMANDS = {
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Guelph Sidewalks Tile Layer builder"
+        description="Guelph Bike Facilities Tile Layer builder"
     )
     sub = parser.add_subparsers(dest="command")
     for name, (_, help_text) in COMMANDS.items():

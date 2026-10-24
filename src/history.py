@@ -7,7 +7,7 @@ A run that fell back to cached OSM observed nothing new and is not recorded,
 so the chart never shows a false plateau.
 
 The parks layer can rebuild its past from Overpass attic queries; this one
-deliberately cannot. An attic query for every road and footway in Guelph is a heavy
+deliberately cannot. An attic query for every road and path in Guelph is a heavy
 ask of a shared instance for each week reconstructed, so the record starts
 with the first weekly build and grows from there.
 """
@@ -20,8 +20,9 @@ import requests
 
 from src import config
 
-FIELDS = ("untraced_km", "missing", "partial", "far", "road_says_no", "untagged",
-          "streets", "city_km")
+FIELDS = ("work", "new", "missing", "says_no", "nosep", "nobike",
+          "unsigned_route", "lane_absent_km", "lane_no_km", "recent_gap_km",
+          "city_km")
 
 
 def record(summary, day=None):

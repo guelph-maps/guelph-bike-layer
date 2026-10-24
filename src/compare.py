@@ -1,48 +1,84 @@
-"""Compare the City sidewalks against OSM's pedestrian lines.
+"""Compare the City's bike facilities against OSM.
 
-Pulls every road and every pedestrian way in the Guelph bbox from Overpass,
-then walks each City sidewalk in steps of config.SAMPLE_STEP_M and asks what
-OSM has beside each sample. The first answer that applies wins:
+Pulls every road and path-like way in the Guelph bbox from Overpass, and
+every route=bicycle relation with its member geometry, then walks each City
+line in steps of config.SAMPLE_STEP_M and asks what OSM has beside each
+sample. What counts depends on what the City line is:
 
-  sidewalk  a footway=sidewalk (or path=sidewalk) way within MATCH_M
-  footway   a plain highway=footway, no footway=* tag, within MATCH_M
-  path      any other pedestrian line within MATCH_M (path, cycleway,
-            footway=crossing, ...)
-  road_tag  the nearest road within ROAD_TAG_M says sidewalk=yes|both|left|right
-  says_no   the nearest road within ROAD_TAG_M says sidewalk=no|none
-  far       nothing above, but a pedestrian line within FAR_M
-  none      nothing at all
+On-road lanes (Bike Lane, Bike Lane - Green, Contraflow, an on-road Cycle
+Track). OSM maps these as a tag on the road, on one side, so each sample:
 
-The first four are "covered". A City segment's status is then decided by how
-much of its length is covered (length-weighted, so a long segment counts for
-what it is):
+  bikeway   a separately mapped cycleway (highway=cycleway, or a path with
+            bicycle=designated) within BIKEWAY_M                   -- covered
+  pos       the road within ROAD_M carries a positive cycleway value on the
+            sample's side: cycleway:<side>, cycleway:both, or a plain
+            cycleway=* (on a oneway road that plain tag is read as the right
+            side only). Contraflow also accepts oneway:bicycle=no.  -- covered
+  no        that side says cycleway=no / none
+  absent    the road says nothing for that side
+  noroad    no road within ROAD_M
 
-  covered >= MATCHED_SHARE   matched. Listed only when the cover is the wrong
-                             kind -- mostly a plain footway ("untagged": tag
-                             it footway=sidewalk), mostly a road tag
-                             ("on_road_tag", off by default: a valid way to map
-                             it), or mostly sidewalk ways with no surface=*
-                             ("nosurface", off by default: low value).
-  covered >= PARTIAL_SHARE   "partial": part of it is traced.
-  less                       a gap, named by what most of its uncovered length
-                             has near it: "road_says_no" (the road claims there
-                             is no sidewalk), "far" (a line 15-25 m off: check
-                             the alignment before adding one), else "missing".
+The side is which side of the OSM way's direction the sample lies on, so the
+tag a mapper adds is cycleway:left or :right of THAT way. A sample within
+SIDE_MIN_M of the centreline has no readable side (3.0 km of City lane lines
+were drawn on the centreline itself in the recalibration); it is judged "any
+side" -- positive if any of the four keys is -- and its segment says so.
 
-A City line that is not BUILT is "proposed" (off by default) if it is not
-matched, and is not listed otherwise. Only City -> OSM is compared: OSM's
-campus and private-site sidewalks, which the City does not inventory, are not
-reported.
+Roads and separate cycleways only count when their direction agrees with the
+City line's (BEARING_MAX_DEG): at an intersection the nearest road is often
+the cross street, whose tags say nothing about this lane.
 
-Listed segments carry the name of the OSM road nearest most of their
-untraced length (or of their whole length, when all of it is covered), so the page can lead with streets rather than with segments. Matching
-runs in UTM 17N metres with shapely's STRtree; a flaky Overpass falls back to
-the cached reply, but only after every mirror has been tried several times --
-see _load_osm.
+Where the City records a buffer, a covered sample also asks whether OSM has
+it: a separate cycleway, a cycleway:<side>:separation* or :buffer* key, or
+(for a physical buffer) cycleway:<side>=track.
+
+Off-road paths (MUP, an off-road Cycle Track): any path-like way within
+PATH_M covers it, preferring one whose direction agrees. It is "nobike" when
+that way is a footway (or pedestrian way, or steps) with no bicycle access
+tag, or bicycle=no. A Cycle Track with no path beside it is also covered by a
+positive cycleway tag on the road on its side.
+
+Signed routes: covered by a member way of a route=bicycle relation within
+ROUTE_M, a separate cycleway, or a road carrying any positive cycleway tag or
+bicycle=designated.
+
+Each City segment then gets one status, length-weighted:
+
+  covered < MATCHED_SHARE   a gap: "says_no" (lanes, when most of the
+                            uncovered length says no), "unsigned_route"
+                            (signed routes), else "missing"; any of these
+                            on a facility installed this year or last is
+                            "new" instead, and keeps the underlying kind in
+                            its "gap" property.
+  covered, but              "nosep" -- a lane whose City buffer OSM does not
+                            record on NOSEP_SHARE of its covered length;
+                            "nobike" -- a path mostly matched to a footway
+                            with no bicycle access.
+
+A gap of under MIN_LISTED_M untraced metres, or a nosep / nobike segment
+shorter than that, is not listed: those are the corner pieces of a protected
+intersection, whose nearest road is the cross street whichever way they
+point.
+
+Not in service: a Planned row is "planned" (off by default) unless OSM has
+it already; an Out of Service row is not listed. Crossrides, intersection
+treatments and curb cuts have no settled OSM tag: every one is listed as
+"spot", shown and never counted.
+
+Only City -> OSM is compared: an OSM cycleway the City does not inventory
+(campus, private sites) is not reported.
+
+Every listed segment carries the tag to add ("tag") and the OSM way it is
+about ("way"), and is named after the nearest named OSM road, with the City's
+own STREETNAME as the fallback. Matching runs in UTM 17N metres with shapely's
+STRtree; a flaky Overpass falls back to the cached reply, but only after every
+mirror has been tried several times -- see _load_osm.
 """
 
 import json
+import math
 import os
+import re
 import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -56,16 +92,33 @@ from pyproj import Transformer
 
 from src import config, history
 
-STATUSES = ("missing", "partial", "far", "road_says_no", "untagged",
-            "on_road_tag", "proposed", "nosurface")
-# Statuses that are a gap in the City's built sidewalk, i.e. untraced length a
-# mapper can add. These make up a street's total on the page.
-GAP_STATUSES = ("missing", "partial", "far", "road_says_no")
-COVERED = ("sidewalk", "footway", "path", "road_tag")
-SAMPLE_CLASSES = COVERED + ("says_no", "far", "none")
+# Order is the page's: work first, newest installs at the head of it.
+STATUSES = ("new", "missing", "says_no", "nosep", "nobike", "unsigned_route",
+            "planned", "spot")
+# The statuses that are work a mapper can do, and so are counted.
+WORK_STATUSES = ("new", "missing", "says_no", "nosep", "nobike",
+                 "unsigned_route")
+# Gap kinds a recent install turns into "new".
+NEW_FROM = ("missing", "says_no", "unsigned_route")
 
-_POSITIVE = {"yes", "both", "left", "right"}
-_NEGATIVE = {"no", "none"}
+POSITIVE = {"lane", "track", "shared_lane", "share_busway", "separate",
+            "shoulder", "opposite_lane", "opposite_track", "opposite", "yes"}
+NEGATIVE = {"no", "none"}
+_CYCLEWAY_KEYS = ("cycleway", "cycleway:both", "cycleway:left",
+                  "cycleway:right")
+_BIKE_OK = {"yes", "designated", "permissive"}
+_FOOT_ONLY = {"footway", "pedestrian", "steps", "corridor"}
+
+# The OSM tag for the separation the City records, by BUFFERTYPE.
+SEPARATION_TAG = {
+    "Painted": "buffer=yes",
+    "Rumble Strip": "separation=rumble_strip",
+    "Curbed": "separation=kerb",
+    "Rolled Curb": "separation=kerb",
+    "Barrier": "separation=jersey_barrier",
+    "Bollard": "separation=bollard",
+    "Barrier and Bollard": "separation=bollard",
+}
 
 _TO_METRIC = Transformer.from_crs(4326, config.METRIC_EPSG, always_xy=True)
 
@@ -74,23 +127,34 @@ def compare():
     """Build data/gaps.geojson + summary from City vs OSM. Returns the summary."""
     data, osm_date, from_cache = _load_osm()
     osm = _osm_ways(data)
-    print(f"OSM ways: {len(osm['sidewalk']):,} sidewalk, "
-          f"{len(osm['other']):,} other pedestrian, {len(osm['road']):,} road")
+    print(f"OSM: {len(osm['road']):,} roads, {len(osm['path']):,} path-like "
+          f"ways ({len(osm['bikeway']):,} bikeways), "
+          f"{len({w['id'] for w in osm['route']}):,} bicycle route relations")
     city = list(_city_features())
     print(f"City lines: {len(city):,}")
 
     gaps, summary = match(city, osm)
     _write_gaps(gaps)
 
-    summary.update({"osm_sidewalk_ways": len(osm["sidewalk"]),
+    summary.update({"osm_bikeways": len(osm["bikeway"]),
+                    "osm_routes": len({w["id"] for w in osm["route"]}),
                     "osm_date": osm_date, "osm_stale": from_cache})
     with open(config.GAPS_COUNT_PATH, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
-    print(f"Untraced: {summary['untraced_km']} km of {summary['city_km']} km "
-          f"built ({summary['far_km']} km of it 15-25 m from an OSM line, "
-          f"{summary['remote_km']} km with nothing within "
-          f"{config.REMOTE_M:.0f} m); {summary['streets']} streets with "
-          f">= {config.STREET_MIN_KM} km")
+    print(f"On-road lanes: {summary['lane_pos_km']} of {summary['lane_km']} km "
+          f"in OSM on their side ({summary['lane_bikeway_km']} km as separate "
+          f"cycleways); {summary['lane_absent_km']} km absent, "
+          f"{summary['lane_no_km']} km says no; {summary['lane_any_km']} km "
+          f"judged any side")
+    print(f"Separation: tagged on {summary['sep_ok_km']} of "
+          f"{summary['buffer_km']} km of buffered lane OSM has")
+    print(f"Off-road: {summary['path_missing_km']} of {summary['path_km']} km "
+          f"with no path, {summary['nobike_km']} km on a footway with no "
+          f"bicycle access")
+    print(f"Signed routes: {summary['unsigned_km']} of {summary['route_km']} km "
+          f"with no relation and no tag")
+    print(f"Installed {summary['recent_since']}+: {summary['recent_gap_km']} of "
+          f"{summary['recent_km']} km not in OSM")
     print("Segments: " + ", ".join(f"{summary[s]:,} {s}" for s in STATUSES))
     if from_cache:
         print(f"NOTE: compared against cached OSM data from {osm_date}, "
@@ -102,15 +166,19 @@ def compare():
 # --- OSM source -------------------------------------------------------------
 
 def _overpass_query():
-    """The Overpass QL for every road and pedestrian way in the Guelph bbox."""
+    """The Overpass QL: roads and path-like ways, then bicycle routes."""
     s, w, n, e = config.GUELPH_BBOX
+    bbox = f"{s},{w},{n},{e}"
     values = "|".join(config.ROAD_HIGHWAYS + config.PATH_HIGHWAYS)
-    # Ways only: a sidewalk is never a relation. "tags geom" carries what the
-    # match reads -- tags and coordinates -- without the node lists.
+    # Ways as "tags geom" (tags and coordinates, no node lists). Relations
+    # need full "geom" to carry their members' geometry; clipped to the bbox,
+    # since the Trans Canada Trail would otherwise bring the whole province.
     return (
         f"[out:json][timeout:{config.OVERPASS_TIMEOUT - 60}];\n"
-        f'way["highway"~"^({values})$"]({s},{w},{n},{e});\n'
-        "out tags geom;"
+        f'way["highway"~"^({values})$"]({bbox});\n'
+        f"out tags geom({bbox});\n"
+        f'relation["route"="bicycle"]({bbox});\n'
+        f"out geom({bbox});"
     )
 
 
@@ -129,7 +197,7 @@ def _load_osm():
     and be retried by the scheduler.
     """
     query = _overpass_query()
-    print("Querying Overpass for OSM roads and pedestrian ways ...")
+    print("Querying Overpass for OSM roads, paths and bicycle routes ...")
     for attempt in range(config.OVERPASS_ROUNDS):
         if attempt:
             print(f"  no mirror answered; retrying the list in "
@@ -186,13 +254,21 @@ def _try_overpass(url, query):
         print(f"  {host}: {type(e).__name__}: {str(e).splitlines()[0][:120]}")
         return None
 
-    count = len(data.get("elements", []))
+    elements = data.get("elements", [])
+    count = len(elements)
     if count < config.OSM_MIN_ELEMENTS:
         # HTTP 200 is not proof of an answer. A regional instance replies to an
         # out-of-region bbox with a valid, empty element list, and taking that
-        # at face value would report every City sidewalk as missing from OSM.
+        # at face value would report every City facility as missing from OSM.
         print(f"  {host}: {count:,} elements, under the "
               f"{config.OSM_MIN_ELEMENTS:,} floor -- ignoring this reply")
+        return None
+    routes = sum(1 for el in elements if el.get("type") == "relation")
+    if routes < config.OSM_MIN_ROUTES:
+        # The relation half of the query timing out leaves the ways intact,
+        # and every signed route would then read as unsigned.
+        print(f"  {host}: {routes:,} bicycle routes, under the "
+              f"{config.OSM_MIN_ROUTES:,} floor -- ignoring this reply")
         return None
     base = _osm_base_time(data)
     if base is None or datetime.now(timezone.utc) - base > timedelta(days=config.OSM_MAX_AGE_DAYS):
@@ -203,8 +279,8 @@ def _try_overpass(url, query):
         print(f"  {host}: OSM data from {_osm_base(data)}, not within "
               f"{config.OSM_MAX_AGE_DAYS} days -- ignoring this reply")
         return None
-    print(f"  {host}: {count:,} elements in {time.time() - started:.0f}s, "
-          f"OSM base {_osm_base(data)}")
+    print(f"  {host}: {count:,} elements ({routes} routes) in "
+          f"{time.time() - started:.0f}s, OSM base {_osm_base(data)}")
     return data
 
 
@@ -267,13 +343,24 @@ def _save_fetch(fetched, url, osm_base, data):
 
 
 def _osm_ways(data):
-    """Split the reply into sidewalk, other pedestrian and road ways.
+    """Split the reply into roads, path-like ways, bikeways and route lines.
 
-    Each way is {"id", "tags", "g"} with g a metric LineString. Pedestrian
-    areas (area=yes) are dropped: their outline is not a line anyone walks.
+    Each way is {"id", "tags", "g"} with g a metric LineString. "bikeway" is
+    the subset of "path" a cyclist is meant to use. "route" has one entry per
+    member way of each route=bicycle relation, carrying the relation's id and
+    tags. Pedestrian areas (area=yes) are dropped.
     """
-    out = {"sidewalk": [], "other": [], "road": []}
+    out = {"road": [], "path": [], "bikeway": [], "route": []}
     for el in data.get("elements", []):
+        if el.get("type") == "relation":
+            for m in el.get("members") or []:
+                if m.get("type") != "way":
+                    continue
+                pts = [(p["lon"], p["lat"]) for p in m.get("geometry") or [] if p]
+                if len(pts) >= 2:
+                    out["route"].append({"id": el["id"], "tags": el.get("tags") or {},
+                                         "g": _line(pts)})
+            continue
         if el.get("type") != "way" or not el.get("geometry"):
             continue
         tags = el.get("tags") or {}
@@ -285,31 +372,94 @@ def _osm_ways(data):
         if hw in config.ROAD_HIGHWAYS:
             out["road"].append(way)
         elif hw in config.PATH_HIGHWAYS and tags.get("area") != "yes":
-            if tags.get("footway") == "sidewalk" or tags.get("path") == "sidewalk":
-                out["sidewalk"].append(way)
-            else:
-                out["other"].append(way)
+            out["path"].append(way)
+            if is_bikeway(tags):
+                out["bikeway"].append(way)
     return out
 
 
-def road_sidewalk(tags):
-    """What a road's sidewalk tags say: "yes", "no", or None.
+def is_bikeway(tags):
+    """A way a cyclist is meant to use: highway=cycleway or bicycle=designated."""
+    return tags.get("highway") == "cycleway" or tags.get("bicycle") == "designated"
 
-    A positive value on any side counts as yes; "separate" says nothing
-    either way (the sidewalk should be its own way, found or not).
+
+def side_value(tags, side):
+    """The cycleway value a road carries on ``side`` ("left" / "right").
+
+    cycleway:<side> wins, then cycleway:both, then a plain cycleway=*. On a
+    oneway road a plain cycleway=lane|track is read as the right side only --
+    the side traffic keeps to -- so it says nothing about a left-hand lane.
     """
-    vals = [tags.get(k) for k in ("sidewalk", "sidewalk:both",
-                                  "sidewalk:left", "sidewalk:right")]
-    if any(v in _POSITIVE for v in vals if v):
-        return "yes"
-    if any(v in _NEGATIVE for v in vals if v):
+    v = tags.get(f"cycleway:{side}") or tags.get("cycleway:both")
+    if v is not None:
+        return v
+    v = tags.get("cycleway")
+    if v is None:
+        return None
+    if side == "left" and tags.get("oneway") in ("yes", "1") \
+            and v in ("lane", "track"):
+        return None
+    return v
+
+
+def lane_state(tags, side, contraflow=False):
+    """"pos", "no" or "absent": what a road says about a lane on ``side``.
+
+    ``side`` "any" reads all four cycleway keys, for a City line drawn on the
+    centreline whose side cannot be told.
+    """
+    if side == "any":
+        vals = [tags.get(k) for k in _CYCLEWAY_KEYS]
+    else:
+        vals = [side_value(tags, side)]
+    if any(v in POSITIVE for v in vals):
+        return "pos"
+    if contraflow and tags.get("oneway:bicycle") == "no":
+        return "pos"
+    if any(v in NEGATIVE for v in vals):
         return "no"
-    return None
+    if tags.get("bicycle") == "designated" and all(v is None for v in vals):
+        return "pos"
+    return "absent"
 
 
-def is_plain_footway(tags):
-    """A highway=footway with no footway=* subtype: likely an untagged sidewalk."""
-    return tags.get("highway") == "footway" and not tags.get("footway")
+def has_separation(tags, side, buffer):
+    """Does a road record, on ``side``, the buffer the City has?
+
+    Any cycleway[:<side>|:both]:separation* or :buffer* key will do; for a
+    physical buffer (not a painted one) so does cycleway:<side>=track, which
+    is a lane behind a curb by definition. A value of "separate" says the
+    lane is its own way, which carries the separation.
+    """
+    sides = "(left|right|both)" if side == "any" else f"({side}|both)"
+    pat = re.compile(rf"^cycleway(:{sides})?:(separation|buffer)")
+    if any(pat.match(k) for k in tags):
+        return True
+    vals = ([tags.get(k) for k in _CYCLEWAY_KEYS] if side == "any"
+            else [side_value(tags, side)])
+    if "separate" in vals:
+        return True
+    return buffer != "Painted" and "track" in vals
+
+
+def route_tagged(tags):
+    """Does a road say it is a bike route, without a relation?
+
+    Any positive cycleway value will do, and so does bicycle=designated, which
+    is how Guelph's signed shared streets are mostly tagged -- often beside a
+    cycleway:both=no, since a signed route has no lane.
+    """
+    return lane_state(tags, "any") == "pos" or tags.get("bicycle") == "designated"
+
+
+def bike_access(tags):
+    """"ok" or "nobike": may a cyclist use this path-like way?"""
+    bicycle = tags.get("bicycle")
+    if bicycle in ("no", "dismount"):
+        return "nobike"
+    if tags.get("highway") in _FOOT_ONLY and bicycle not in _BIKE_OK:
+        return "nobike"
+    return "ok"
 
 
 # --- City source ------------------------------------------------------------
@@ -333,93 +483,268 @@ def _line(pts):
     return shapely.linestrings(np.column_stack([xs, ys]))
 
 
+def group_of(props):
+    """"lane", "path", "route" or "spot": which rule matches this City row."""
+    ftype = props.get("type")
+    if props.get("kind") == "spot":
+        return "spot"
+    if ftype == "Signed Route":
+        return "route"
+    if ftype in config.LANE_TYPES and props.get("onroad"):
+        return "lane"
+    return "path"
+
+
 # --- Matching ---------------------------------------------------------------
 
-def match(city, osm):
+def match(city, osm, today=None):
     """Classify every City line. Returns (gap features, summary dict).
 
     ``city`` items are {"props", "geom", "lines": [metric LineString]};
-    ``osm`` is {"sidewalk"|"other"|"road": [{"id", "tags", "g"}]}.
+    ``osm`` is {"road"|"path"|"bikeway"|"route": [{"id", "tags", "g"}]}.
     """
-    pts, weights, owner = _sample(city)
-    cls, way = classify(pts, osm)
+    today = today or date.today()
+    new_since = today.year - config.NEW_YEARS
+    groups = [group_of(c["props"]) for c in city]
+    pts, bear, weights, owner = _sample(city)
+    grp = np.array([groups[i] for i in owner], dtype=object)
 
-    # Every sample is attributed to the nearest named road, so each listed
-    # segment can be filed under a street.
+    roads = _aligned(pts, bear, osm["road"], config.ROAD_M)
+    bikeways = _aligned(pts, bear, osm["bikeway"], config.BIKEWAY_M)
+    paths = _aligned(pts, bear, osm["path"], config.PATH_M, fallback=True)
+    routes = _aligned(pts, bear, osm["route"], config.ROUTE_M)
     named = [w for w in osm["road"] if w["tags"].get("name")]
-    street_idx = _nearest(pts, [w["g"] for w in named], config.STREET_M)[0]
+    streets = _aligned(pts, bear, named, config.STREET_M, fallback=True)
 
-    per = [defaultdict(float) for _ in city]
-    ways = [defaultdict(Counter) for _ in city]
-    streets = [Counter() for _ in city]       # all samples
-    streets_gap = [Counter() for _ in city]   # untraced samples only
-    totals = Counter()
-    remote_m = 0.0
-    built = np.array([c["props"].get("status") == "built" for c in city])
-    near_any = _nearest(pts, [w["g"] for w in osm["sidewalk"] + osm["other"]],
-                        config.REMOTE_M)[0]
+    per = [Counter() for _ in city]          # sample class -> metres
+    sep = [Counter() for _ in city]          # "ok"/"lack" -> metres
+    sides = [Counter() for _ in city]        # side -> metres
+    blame = [defaultdict(Counter) for _ in city]  # class -> way id -> metres
+    names = [Counter() for _ in city]
     for k in range(len(pts)):
-        i, c, w = owner[k], cls[k], weights[k]
-        per[i][c] += w
-        if way[k] is not None:
-            ways[i][c][way[k]] += w
-        if built[i]:
-            totals[c] += w
-            if c not in COVERED and near_any[k] < 0:
-                remote_m += w
-        if street_idx[k] >= 0:
-            name = named[street_idx[k]]["tags"]["name"]
-            streets[i][name] += w
-            if c not in COVERED:
-                streets_gap[i][name] += w
+        i, w, g = owner[k], weights[k], grp[k]
+        p = city[i]["props"]
+        if streets["idx"][k] >= 0:
+            names[i][named[streets["idx"][k]]["tags"]["name"]] += w
+        if g == "spot":
+            continue
+        cls, way, side = _classify(k, g, p, osm, roads, bikeways, paths, routes)
+        per[i][cls] += w
+        if way is not None:
+            blame[i][cls][way] += w
+        if side is not None:
+            sides[i][side] += w
+        if g == "lane" and cls in ("pos", "bikeway") and p.get("buffer"):
+            ok = cls == "bikeway" or has_separation(
+                osm["road"][roads["idx"][k]]["tags"], side, p["buffer"])
+            sep[i]["ok" if ok else "lack"] += w
+            if not ok:
+                blame[i]["lack"][way] += w
 
-    has_surface = {w["id"] for w in osm["sidewalk"] if w["tags"].get("surface")}
     gaps = []
     counts = Counter()
-    street_m = Counter()
     for i, c in enumerate(city):
-        status = segment_status(per[i], built[i],
-                                _surfaced(ways[i]["sidewalk"], has_surface))
+        p = c["props"]
+        status, gap = segment_status(groups[i], p, per[i], sep[i], new_since)
         if status is None:
             continue
         counts[status] += 1
-        length = sum(per[i].values())
-        untraced = length - sum(per[i][k] for k in COVERED)
-        # Named for where the gap is when there is one, else for the whole
-        # segment: an untagged footway still belongs to a street.
-        named_by = streets_gap[i] or streets[i]
-        street = named_by.most_common(1)[0][0] if named_by else ""
-        if status in GAP_STATUSES:
-            street_m[street] += untraced
-        gaps.append(_gap_feature(c, status, length, untraced, street,
-                                 _blame_way(status, ways[i])))
+        length = sum(per[i].values()) or float(p.get("length") or 0)
+        covered = sum(per[i][k] for k in COVERED[groups[i]])
+        side = sides[i].most_common(1)[0][0] if sides[i] else None
+        way = _blame_way(gap or status, blame[i])
+        street = (names[i].most_common(1)[0][0] if names[i]
+                  else p.get("street", ""))
+        gaps.append(_gap_feature(c, status, gap, length, length - covered,
+                                 street, side, way,
+                                 tag_hint(gap or status, p, side)))
 
-    city_m = sum(totals.values())
-    untraced_m = sum(totals[k] for k in SAMPLE_CLASSES if k not in COVERED)
-    summary = {
-        "city": int(built.sum()),
-        "city_km": _km(city_m),
-        "covered_km": _km(sum(totals[k] for k in COVERED)),
-        "untraced_km": _km(untraced_m),
-        "far_km": _km(totals["far"]),
-        "says_no_km": _km(totals["says_no"]),
-        "remote_km": _km(remote_m),
-        "gap_km": _km(sum(street_m.values())),
-        "streets": sum(1 for s, m in street_m.items()
-                       if s and m >= config.STREET_MIN_KM * 1000),
+    summary = _summary(city, groups, per, sep, counts, new_since, roads,
+                       pts, weights, owner)
+    return gaps, summary
+
+
+# Sample classes that count as covered, per rule.
+COVERED = {
+    "lane": ("pos", "bikeway"),
+    "path": ("ok", "nobike"),
+    "route": ("relation", "bikeway", "road_pos"),
+    "spot": (),
+}
+
+
+def _classify(k, group, props, osm, roads, bikeways, paths, routes):
+    """(class, OSM way id, side) for sample k of a City line in ``group``."""
+    if group == "lane":
+        if bikeways["idx"][k] >= 0:
+            return "bikeway", osm["bikeway"][bikeways["idx"][k]]["id"], None
+        r = roads["idx"][k]
+        if r < 0:
+            return "noroad", None, None
+        side = ("any" if roads["dist"][k] < config.SIDE_MIN_M
+                else roads["side"][k])
+        state = lane_state(osm["road"][r]["tags"], side,
+                           contraflow=props.get("type") == "Contraflow")
+        return state, osm["road"][r]["id"], side
+    if group == "path":
+        q = paths["idx"][k]
+        if q >= 0:
+            way = osm["path"][q]
+            return bike_access(way["tags"]), way["id"], None
+        r = roads["idx"][k]
+        if props.get("type") == "Cycle Track" and r >= 0 \
+                and roads["dist"][k] >= config.SIDE_MIN_M \
+                and lane_state(osm["road"][r]["tags"], roads["side"][k]) == "pos":
+            return "ok", osm["road"][r]["id"], None
+        return "missing", None, None
+    # group == "route"
+    if routes["idx"][k] >= 0:
+        return "relation", osm["route"][routes["idx"][k]]["id"], None
+    if bikeways["idx"][k] >= 0:
+        return "bikeway", osm["bikeway"][bikeways["idx"][k]]["id"], None
+    r = roads["idx"][k]
+    if r >= 0 and route_tagged(osm["road"][r]["tags"]):
+        return "road_pos", osm["road"][r]["id"], None
+    return "none", (osm["road"][r]["id"] if r >= 0 else None), None
+
+
+def segment_status(group, props, lengths, sep, new_since):
+    """(status, underlying gap kind or None) for one City segment.
+
+    ``lengths`` maps sample classes to metres, ``sep`` maps "ok"/"lack" to
+    the metres of covered, buffered lane that do / do not record the buffer.
+    A status of None means the segment is not listed.
+    """
+    if group == "spot":
+        return ("spot", None) if props.get("status") == "in_service" else (None, None)
+    total = sum(lengths.values())
+    if total <= 0:
+        return None, None
+    covered = sum(lengths.get(k, 0) for k in COVERED[group])
+    matched = covered / total >= config.MATCHED_SHARE
+    if props.get("status") != "in_service":
+        if props.get("status") == "planned" and not matched:
+            return "planned", None
+        return None, None
+    if matched:
+        if total < config.MIN_LISTED_M:
+            return None, None
+        if group == "lane" and sum(sep.values()) \
+                and sep.get("lack", 0) >= config.NOSEP_SHARE * sum(sep.values()):
+            return "nosep", None
+        if group == "path" and lengths.get("nobike", 0) >= 0.5 * covered:
+            return "nobike", None
+        return None, None
+    if total - covered < config.MIN_LISTED_M:
+        return None, None
+    if group == "route":
+        gap = "unsigned_route"
+    elif group == "lane" and lengths.get("no", 0) >= total - covered - lengths.get("no", 0):
+        gap = "says_no"
+    else:
+        gap = "missing"
+    if gap in NEW_FROM and (props.get("year") or 0) >= new_since:
+        return "new", gap
+    return gap, None
+
+
+def tag_hint(kind, props, side):
+    """The tag a mapper adds for a segment of status ``kind`` (a gap kind)."""
+    ftype = props.get("type")
+    buffer = props.get("buffer")
+    s = side if side in ("left", "right") else "<left|right>"
+    if kind == "nosep":
+        return f"cycleway:{s}:{SEPARATION_TAG.get(buffer, 'separation=*')}"
+    if kind == "nobike":
+        if ftype == "MUP":
+            return "bicycle=designated + segregated=no"
+        return "highway=cycleway"
+    if kind == "unsigned_route":
+        return "route=bicycle relation (network=lcn) over this street"
+    if kind in ("missing", "says_no"):
+        if group_of(props) == "path":
+            if ftype == "MUP":
+                return ("highway=path + bicycle=designated + foot=designated"
+                        " + segregated=no")
+            return "highway=cycleway"
+        value = "track" if ftype == "Cycle Track" else "lane"
+        tags = [f"cycleway:{s}={value}"]
+        if ftype == "Contraflow":
+            tags += [f"cycleway:{s}:oneway=-1", "oneway:bicycle=no"]
+        if ftype == "Bike Lane - Green":
+            tags.append(f"cycleway:{s}:surface:colour=green")
+        if buffer in SEPARATION_TAG:
+            tags.append(f"cycleway:{s}:{SEPARATION_TAG[buffer]}")
+        hint = " + ".join(tags)
+        if side == "any":
+            hint += " (City line is on the centreline: check the side)"
+        return hint
+    return ""
+
+
+def _blame_way(kind, blame):
+    """The OSM way a listed segment is about: the road to tag, the footway to
+    retag, the road saying no."""
+    cls = {"missing": ("absent", "no"), "says_no": ("no",), "nosep": ("lack",),
+           "nobike": ("nobike",), "unsigned_route": ("none",)}.get(kind, ())
+    best = Counter()
+    for c in cls:
+        best.update(blame.get(c, {}))
+    return best.most_common(1)[0][0] if best else None
+
+
+def _summary(city, groups, per, sep, counts, new_since, roads, pts, weights,
+             owner):
+    in_service = [c["props"].get("status") == "in_service" for c in city]
+
+    def km(group, classes=None):
+        m = 0.0
+        for i, g in enumerate(groups):
+            if g == group and in_service[i]:
+                m += (sum(per[i].values()) if classes is None
+                      else sum(per[i][k] for k in classes))
+        return _km(m)
+
+    any_m = sum(weights[k] for k in range(len(pts))
+                if groups[owner[k]] == "lane" and in_service[owner[k]]
+                and roads["idx"][k] >= 0 and roads["dist"][k] < config.SIDE_MIN_M)
+    recent = [i for i, c in enumerate(city) if in_service[i]
+              and groups[i] != "spot" and (c["props"].get("year") or 0) >= new_since]
+    recent_m = sum(sum(per[i].values()) for i in recent)
+    recent_gap_m = sum(sum(per[i].values()) - sum(per[i][k] for k in COVERED[groups[i]])
+                       for i in recent)
+    return {
+        "city": sum(1 for i, g in enumerate(groups) if in_service[i] and g != "spot"),
+        "city_km": _km(sum(sum(p.values()) for i, p in enumerate(per) if in_service[i])),
+        "lane_km": km("lane"),
+        "lane_pos_km": km("lane", ("pos", "bikeway")),
+        "lane_bikeway_km": km("lane", ("bikeway",)),
+        "lane_absent_km": km("lane", ("absent", "noroad")),
+        "lane_no_km": km("lane", ("no",)),
+        "lane_any_km": _km(any_m),
+        "buffer_km": _km(sum(sum(s.values()) for i, s in enumerate(sep) if in_service[i])),
+        "sep_ok_km": _km(sum(s["ok"] for i, s in enumerate(sep) if in_service[i])),
+        "path_km": km("path"),
+        "path_missing_km": km("path", ("missing",)),
+        "nobike_km": km("path", ("nobike",)),
+        "route_km": km("route"),
+        "unsigned_km": km("route", ("none",)),
+        "recent_since": new_since,
+        "recent_km": _km(recent_m),
+        "recent_gap_km": _km(recent_gap_m),
+        "work": sum(counts[s] for s in WORK_STATUSES),
         **{s: counts[s] for s in STATUSES},
     }
-    return gaps, summary
 
 
 def _sample(city):
     """Points every ~SAMPLE_STEP_M along each City line.
 
-    Returns (points, length each stands for, owning feature index). Each part
-    is cut into equal pieces and sampled at their midpoints, so the weights of
-    a line sum to its length.
+    Returns (points, local bearing in radians mod pi, length each stands for,
+    owning feature index). Each part is cut into equal pieces and sampled at
+    their midpoints, so the weights of a line sum to its length.
     """
-    pts, weights, owner = [], [], []
+    pts, bear, weights, owner = [], [], [], []
     for i, c in enumerate(city):
         for ln in c["lines"]:
             length = ln.length
@@ -428,115 +753,87 @@ def _sample(city):
             n = max(1, int(round(length / config.SAMPLE_STEP_M)))
             d = (np.arange(n) + 0.5) * (length / n)
             pts.extend(shapely.line_interpolate_point(ln, d))
+            same = np.empty(n, dtype=object)
+            same[:] = [ln] * n
+            bear.extend(_bearing(same, d))
             weights.extend([length / n] * n)
             owner.extend([i] * n)
-    return np.array(pts, dtype=object), np.array(weights), np.array(owner)
+    return (np.array(pts, dtype=object), np.array(bear), np.array(weights),
+            np.array(owner, dtype=int))
 
 
-def classify(pts, osm):
-    """One SAMPLE_CLASSES value per point, plus the OSM way id behind it."""
-    sw = osm["sidewalk"]
-    ot = osm["other"]
-    rd = osm["road"]
-    i_sw, _ = _nearest(pts, [w["g"] for w in sw], config.MATCH_M)
-    i_ot, _ = _nearest(pts, [w["g"] for w in ot], config.MATCH_M)
-    i_rd, _ = _nearest(pts, [w["g"] for w in rd], config.ROAD_TAG_M)
-    i_far, _ = _nearest(pts, [w["g"] for w in sw + ot], config.FAR_M)
-    rd_says = [road_sidewalk(w["tags"]) for w in rd]
-
-    cls = np.empty(len(pts), dtype=object)
-    way = np.full(len(pts), None, dtype=object)
-    for k in range(len(pts)):
-        if i_sw[k] >= 0:
-            cls[k], way[k] = "sidewalk", sw[i_sw[k]]["id"]
-        elif i_ot[k] >= 0:
-            t = ot[i_ot[k]]["tags"]
-            cls[k] = "footway" if is_plain_footway(t) else "path"
-            way[k] = ot[i_ot[k]]["id"]
-        elif i_rd[k] >= 0 and rd_says[i_rd[k]] == "yes":
-            cls[k], way[k] = "road_tag", rd[i_rd[k]]["id"]
-        elif i_rd[k] >= 0 and rd_says[i_rd[k]] == "no":
-            cls[k], way[k] = "says_no", rd[i_rd[k]]["id"]
-        elif i_far[k] >= 0:
-            cls[k] = "far"
-        else:
-            cls[k] = "none"
-    return cls, way
+def _bearing(lines, d, half=2.0):
+    """Direction (radians, mod pi) of each line around distance d along it."""
+    lengths = shapely.length(lines)
+    a = shapely.line_interpolate_point(lines, np.clip(d - half, 0, lengths))
+    b = shapely.line_interpolate_point(lines, np.clip(d + half, 0, lengths))
+    return np.mod(np.arctan2(shapely.get_y(b) - shapely.get_y(a),
+                             shapely.get_x(b) - shapely.get_x(a)), math.pi)
 
 
-def segment_status(lengths, built, surfaced=1.0):
-    """The status of one City segment from its per-class lengths (metres).
+def _aligned(pts, bear, ways, maxd, fallback=False):
+    """Each point's nearest way within maxd whose direction agrees with its own.
 
-    ``lengths`` maps SAMPLE_CLASSES to metres; ``surfaced`` is the share of its
-    sidewalk-way cover whose way carries surface=*. None means the segment is
-    not listed.
+    Returns {"idx", "dist", "side"}: an index into ``ways`` (-1 for none), the
+    distance, and "left"/"right" -- which side of that way's direction the
+    point lies on. With ``fallback`` a point with no agreeing way takes the
+    plain nearest instead.
     """
-    total = sum(lengths.values())
-    if total <= 0:
-        return None
-    covered = sum(lengths.get(k, 0) for k in COVERED)
-    share = covered / total
-    if not built:
-        return None if share >= config.MATCHED_SHARE else "proposed"
-    if share >= config.MATCHED_SHARE:
-        top = max(COVERED, key=lambda k: lengths.get(k, 0))
-        if top == "footway":
-            return "untagged"
-        if top == "road_tag":
-            return "on_road_tag"
-        if top == "sidewalk" and surfaced < 0.5:
-            return "nosurface"
-        return None
-    if share >= config.PARTIAL_SHARE:
-        return "partial"
-    uncovered = total - covered
-    if lengths.get("says_no", 0) * 2 >= uncovered:
-        return "road_says_no"
-    if lengths.get("far", 0) * 2 >= uncovered:
-        return "far"
-    return "missing"
-
-
-def _surfaced(counter, has_surface):
-    """Share of a segment's sidewalk-way cover whose way has surface=*."""
-    total = sum(counter.values())
-    if not total:
-        return 1.0
-    return sum(m for wid, m in counter.items() if wid in has_surface) / total
-
-
-def _blame_way(status, ways):
-    """The OSM way a matched-but-flagged or road_says_no segment points at."""
-    cls = {"untagged": "footway", "on_road_tag": "road_tag",
-           "nosurface": "sidewalk", "road_says_no": "says_no"}.get(status)
-    if cls and ways.get(cls):
-        return ways[cls].most_common(1)[0][0]
-    return None
-
-
-def _nearest(pts, geoms, maxd):
-    """Index into geoms of each point's nearest within maxd (else -1), + distance."""
-    idx = np.full(len(pts), -1)
-    dist = np.full(len(pts), np.inf)
-    if not geoms or not len(pts):
-        return idx, dist
+    n = len(pts)
+    out = {"idx": np.full(n, -1), "dist": np.full(n, np.inf),
+           "side": np.full(n, None, dtype=object)}
+    if not ways or not n:
+        return out
+    geoms = np.array([w["g"] for w in ways], dtype=object)
     tree = shapely.STRtree(geoms)
-    (pi, ti), dd = tree.query_nearest(pts, max_distance=maxd,
-                                      return_distance=True, all_matches=False)
-    idx[pi] = ti
-    dist[pi] = dd
-    return idx, dist
+    pi, ti = tree.query(pts, predicate="dwithin", distance=maxd)
+    if not len(pi):
+        return out
+    g = geoms[ti]
+    p = pts[pi]
+    dist = shapely.distance(p, g)
+    s = shapely.line_locate_point(g, p)
+    lengths = shapely.length(g)
+    a = shapely.line_interpolate_point(g, np.clip(s - 2.0, 0, lengths))
+    b = shapely.line_interpolate_point(g, np.clip(s + 2.0, 0, lengths))
+    q = shapely.line_interpolate_point(g, s)
+    ax, ay, bx, by = shapely.get_x(a), shapely.get_y(a), shapely.get_x(b), shapely.get_y(b)
+    road_bear = np.mod(np.arctan2(by - ay, bx - ax), math.pi)
+    diff = np.abs(road_bear - bear[pi])
+    diff = np.minimum(diff, math.pi - diff)
+    agrees = diff <= math.radians(config.BEARING_MAX_DEG)
+    cross = (bx - ax) * (shapely.get_y(p) - shapely.get_y(q)) - \
+        (by - ay) * (shapely.get_x(p) - shapely.get_x(q))
+
+    # Nearest agreeing candidate per point; then, with fallback, the nearest
+    # of any for the points that had none.
+    order = np.lexsort((dist, ~agrees, pi))
+    first = np.ones(len(order), dtype=bool)
+    first[1:] = pi[order][1:] != pi[order][:-1]
+    pick = order[first]
+    keep = agrees[pick] | fallback
+    pick = pick[keep]
+    out["idx"][pi[pick]] = ti[pick]
+    out["dist"][pi[pick]] = dist[pick]
+    out["side"][pi[pick]] = np.where(cross[pick] > 0, "left", "right")
+    return out
 
 
-def _gap_feature(c, status, length, untraced, street, way):
+def _gap_feature(c, status, gap, length, untraced, street, side, way, tag):
     p = c["props"]
     props = {"status": status, "street": street,
              "length": int(round(length)), "untraced": int(round(untraced))}
-    for k in ("id", "installed", "surface", "width"):
+    if gap:
+        props["gap"] = gap
+    for k in ("id", "type", "kind", "buffer", "year"):
         if p.get(k) is not None:
             props[k] = p[k]
+    if side:
+        props["side"] = side
     if way is not None:
         props["way"] = way
+    if tag:
+        props["tag"] = tag
     return {"type": "Feature", "properties": props,
             "geometry": {"type": c["geom"]["type"],
                          "coordinates": _round(c["geom"]["coordinates"])}}
