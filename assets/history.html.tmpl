@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guelph Sidewalks &mdash; OSM Coverage Gaps Over Time</title>
+<title>Guelph Bike Facilities &mdash; OSM Gaps Over Time</title>
 <link rel="stylesheet" href="../index.css">
 <style>
   main { max-width: 900px; }
@@ -42,20 +42,19 @@
 <body>
 <main>
 
-<h1>Sidewalk gaps over time</h1>
+<h1>Bike facility gaps over time</h1>
 <p class="lead">
-  How much City of Guelph sidewalk still has no OpenStreetMap line within
-  {{MATCH_M}}&nbsp;m &mdash; in <strong>kilometres untraced</strong>, and in
-  segments that are <strong>missing</strong>, <strong>partial</strong>,
-  <strong>far</strong> from an OSM line, on a road that <strong>says
-  no</strong> sidewalk, or traced as an <strong>untagged</strong> footway
-  &mdash; one point per weekly comparison, so a mapper can see the worklist
-  shrink.
+  How much of the City of Guelph's cycling network OpenStreetMap still lacks
+  &mdash; in <strong>kilometres</strong> of lane with no tag on its side or a
+  tag saying <em>no</em>, and of facilities installed since {{RECENT_SINCE}}
+  that OSM does not have yet; and in segments by status &mdash; one point per
+  weekly comparison, so a mapper can watch new City installs arrive and the
+  worklist shrink.
 </p>
 <p class="meta">{{RUN_COUNT}} comparisons since {{FIRST_DATE}} &middot; last {{BUILD_DATE}} &middot;
   <a href="./">current gaps</a> &middot; <a href="history.jsonl">data (JSONL)</a></p>
 
-<h2>Untraced kilometres</h2>
+<h2>Kilometres</h2>
 <div class="legend" id="legend-km"></div>
 <div class="chart" id="chart-km"><div class="tip"></div></div>
 
@@ -64,18 +63,19 @@
 <div class="chart" id="chart-counts"><div class="tip"></div></div>
 
 <p class="meta" style="margin-top:.75rem">
-  Figures follow the City's Sidewalks layer, so they move when the City adds
-  or removes sidewalk, not only when someone maps one. A segment that is
-  traced moves out of its status; one that is half traced can move from
-  missing to partial first.
+  Figures follow the City's Bike Facilities layer, so they move when the City
+  adds a facility, not only when someone maps one: a week where "new" rises is
+  a week the City published an install. A segment that is mapped leaves its
+  status.
 </p>
 
 <h2>Every comparison</h2>
 <table class="runs">
   <thead>
-    <tr><th>Date</th><th>Untraced km</th><th>Missing</th><th>Partial</th>
-        <th>Far</th><th>Road says no</th><th>Untagged</th>
-        <th>Streets &ge;&nbsp;{{STREET_MIN_KM}}&nbsp;km</th><th>City km</th>
+    <tr><th>Date</th><th>Work</th><th>New</th><th>Missing</th>
+        <th>Says no</th><th>No sep.</th><th>No bike</th><th>Unsigned route</th>
+        <th>Lane absent km</th><th>Lane says no km</th>
+        <th>Recent not in OSM km</th><th>City km</th>
         <th>Source</th></tr>
   </thead>
   <tbody>

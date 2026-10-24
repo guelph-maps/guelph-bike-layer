@@ -1,4 +1,4 @@
-// Guelph Sidewalks landing page: preview map + copy buttons.
+// Guelph Bike Facilities landing page: preview map + copy buttons.
 
 (function () {
   "use strict";

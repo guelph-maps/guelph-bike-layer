@@ -1,22 +1,25 @@
 // Gap history page: line charts of the recorded compare runs, drawn as inline
-// SVG from the rows embedded in the page. Two charts, not one: untraced km
-// (~70) and segment counts (~20 to ~300) on one axis would flatten whichever
-// is smaller, and a second axis invites reading the lines against each other.
-// Same colours as the gap map's lines, so "missing" is the same magenta here
-// and there.
+// SVG from the rows embedded in the page. Two charts, not one: kilometres
+// (a few) and segment counts (tens) on one axis would flatten whichever is
+// smaller, and a second axis invites reading the lines against each other.
+// Same colours as the gap map's lines, so "new" is the same magenta here and
+// there.
 
 (function () {
   "use strict";
 
   var KM_SERIES = [
-    { key: "untraced_km", label: "Untraced km", short: "km", color: "#c2255c" },
+    { key: "recent_gap_km", label: "Recent installs not in OSM", short: "recent", color: "#c2255c" },
+    { key: "lane_absent_km", label: "Lane absent on its side", short: "absent", color: "#f08c00" },
+    { key: "lane_no_km", label: "Lane where OSM says no", short: "says no", color: "#e03131" },
   ];
   var COUNT_SERIES = [
-    { key: "missing", label: "Missing", short: "missing", color: "#c2255c" },
-    { key: "partial", label: "Partial", short: "partial", color: "#f08c00" },
-    { key: "far", label: "Far", short: "far", color: "#7048e8" },
-    { key: "road_says_no", label: "Road says no", short: "says no", color: "#e03131" },
-    { key: "untagged", label: "Untagged footway", short: "untagged", color: "#1c7ed6" },
+    { key: "new", label: "New", short: "new", color: "#c2255c" },
+    { key: "missing", label: "Missing", short: "missing", color: "#f08c00" },
+    { key: "says_no", label: "Says no", short: "says no", color: "#e03131" },
+    { key: "nosep", label: "No separation", short: "nosep", color: "#1098ad" },
+    { key: "nobike", label: "No bicycle access", short: "nobike", color: "#7048e8" },
+    { key: "unsigned_route", label: "Unsigned route", short: "route", color: "#66a80f" },
   ];
   var W = 860, H = 320;
   var M = { top: 16, right: 150, bottom: 36, left: 48 };

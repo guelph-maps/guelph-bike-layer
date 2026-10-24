@@ -32,11 +32,12 @@ Where the City records a buffer, a covered sample also asks whether OSM has
 it: a separate cycleway, a cycleway:<side>:separation* or :buffer* key, or
 (for a physical buffer) cycleway:<side>=track.
 
-Off-road paths (MUP, an off-road Cycle Track): any path-like way within
-PATH_M covers it, preferring one whose direction agrees. It is "nobike" when
-that way is a footway (or pedestrian way, or steps) with no bicycle access
-tag, or bicycle=no. A Cycle Track with no path beside it is also covered by a
-positive cycleway tag on the road on its side.
+Off-road paths (MUP, an off-road Cycle Track): a bikeway within PATH_M
+covers it; so, for a Cycle Track, does a positive cycleway tag on the road on
+its side (cycleway:right=track); failing both, any path-like way within
+PATH_M covers it, preferring one whose direction agrees, and it is "nobike"
+when that way is a footway (or pedestrian way, or steps) with no bicycle
+access tag, or bicycle=no.
 
 Signed routes: covered by a member way of a route=bicycle relation within
 ROUTE_M, a separate cycleway, or a road carrying any positive cycleway tag or
@@ -512,6 +513,8 @@ def match(city, osm, today=None):
     roads = _aligned(pts, bear, osm["road"], config.ROAD_M)
     bikeways = _aligned(pts, bear, osm["bikeway"], config.BIKEWAY_M)
     paths = _aligned(pts, bear, osm["path"], config.PATH_M, fallback=True)
+    path_bikeways = _aligned(pts, bear, osm["bikeway"], config.PATH_M,
+                             fallback=True)
     routes = _aligned(pts, bear, osm["route"], config.ROUTE_M)
     named = [w for w in osm["road"] if w["tags"].get("name")]
     streets = _aligned(pts, bear, named, config.STREET_M, fallback=True)
@@ -528,7 +531,8 @@ def match(city, osm, today=None):
             names[i][named[streets["idx"][k]]["tags"]["name"]] += w
         if g == "spot":
             continue
-        cls, way, side = _classify(k, g, p, osm, roads, bikeways, paths, routes)
+        cls, way, side = _classify(k, g, p, osm, roads, bikeways, paths,
+                                   path_bikeways, routes)
         per[i][cls] += w
         if way is not None:
             blame[i][cls][way] += w
@@ -573,7 +577,8 @@ COVERED = {
 }
 
 
-def _classify(k, group, props, osm, roads, bikeways, paths, routes):
+def _classify(k, group, props, osm, roads, bikeways, paths, path_bikeways,
+              routes):
     """(class, OSM way id, side) for sample k of a City line in ``group``."""
     if group == "lane":
         if bikeways["idx"][k] >= 0:
@@ -587,15 +592,22 @@ def _classify(k, group, props, osm, roads, bikeways, paths, routes):
                            contraflow=props.get("type") == "Contraflow")
         return state, osm["road"][r]["id"], side
     if group == "path":
+        # For a cycle track, a bikeway anywhere within reach answers first:
+        # the track runs beside a sidewalk, and the sidewalk is often the
+        # nearer line. A MUP is the shared way itself, so the nearest path is
+        # the one that must let bikes on.
+        track = props.get("type") == "Cycle Track"
+        if track and path_bikeways["idx"][k] >= 0:
+            return "ok", osm["bikeway"][path_bikeways["idx"][k]]["id"], None
+        r = roads["idx"][k]
+        if track and r >= 0 \
+                and roads["dist"][k] >= config.SIDE_MIN_M \
+                and lane_state(osm["road"][r]["tags"], roads["side"][k]) == "pos":
+            return "ok", osm["road"][r]["id"], None
         q = paths["idx"][k]
         if q >= 0:
             way = osm["path"][q]
             return bike_access(way["tags"]), way["id"], None
-        r = roads["idx"][k]
-        if props.get("type") == "Cycle Track" and r >= 0 \
-                and roads["dist"][k] >= config.SIDE_MIN_M \
-                and lane_state(osm["road"][r]["tags"], roads["side"][k]) == "pos":
-            return "ok", osm["road"][r]["id"], None
         return "missing", None, None
     # group == "route"
     if routes["idx"][k] >= 0:
@@ -658,7 +670,7 @@ def tag_hint(kind, props, side):
     if kind == "nobike":
         if ftype == "MUP":
             return "bicycle=designated + segregated=no"
-        return "highway=cycleway"
+        return "highway=cycleway beside the sidewalk (OSM has only the sidewalk)"
     if kind == "unsigned_route":
         return "route=bicycle relation (network=lcn) over this street"
     if kind in ("missing", "says_no"):

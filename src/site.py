@@ -20,10 +20,11 @@ def build_site():
     """Render index.html, copy assets and screenshots into build/site/."""
     os.makedirs(config.SITE_DIR, exist_ok=True)
 
-    # data/sidewalks.count.json is written by slim; before the first slim the
-    # page still renders, with the figures from the 2026-10-09 download.
+    # data/bike.count.json is written by slim; before the first slim the page
+    # still renders, with the figures from the 2026-10-24 download.
     counts = _load_json(config.COUNT_PATH)
     summary = _load_json(config.GAPS_COUNT_PATH)
+    kind_km = counts.get("kind_km", {})
 
     build_date = date.today().isoformat()
 
@@ -43,13 +44,16 @@ def build_site():
         ),
         "{{BUILD_DATE}}": build_date,
         "{{DATA_DATE}}": _data_date(build_date),
-        "{{LINE_COUNT}}": f"{counts.get('lines', 5245):,}",
-        "{{BUILT_KM}}": f"{counts.get('built_km', 715.8):,}",
+        "{{LINE_COUNT}}": f"{counts.get('lines', 1514):,}",
+        "{{IN_SERVICE_KM}}": f"{counts.get('in_service_km', 209.1):,}",
+        "{{LATEST_YEAR}}": str(counts.get("latest_year") or 2026),
+        "{{LATEST_YEAR_ROWS}}": f"{counts.get('latest_year_rows', 61):,}",
+        **{"{{KM_" + k.upper() + "}}": f"{kind_km.get(k, 0):,}"
+           for k in ("painted", "buffered", "separated", "mup", "route", "spot")},
         # The landing page links to the gap page by its headline figure; with
         # no comparison yet there is no figure, and the link says so instead.
-        "{{UNTRACED_KM}}": (f"{summary['untraced_km']:,}"
-                            if "untraced_km" in summary else "?"),
-        "{{MATCH_M}}": f"{config.MATCH_M:.0f}",
+        "{{WORK_COUNT}}": f"{summary['work']:,}" if "work" in summary else "?",
+        "{{NEW_COUNT}}": f"{summary.get('new', 0):,}",
         "{{RASTER_MINZOOM}}": str(min(config.RASTER_ZOOMS)),
         "{{RASTER_MAXZOOM}}": str(max(config.RASTER_ZOOMS)),
         "{{VECTOR_MINZOOM}}": str(config.VECTOR_MINZOOM),
@@ -92,8 +96,6 @@ def _build_gaps_page(build_date):
     os.makedirs(gaps_dir, exist_ok=True)
 
     summary = _load_json(config.GAPS_COUNT_PATH)
-    untraced = summary.get("untraced_km", 0)
-    far = summary.get("far_km", 0)
 
     with open(os.path.join(config.ASSETS_DIR, "gaps.html.tmpl"),
               encoding="utf-8") as f:
@@ -102,36 +104,19 @@ def _build_gaps_page(build_date):
         "{{PAGES_URL}}": config.PAGES_URL,
         "{{BUILD_DATE}}": build_date,
         "{{DATA_DATE}}": _data_date(build_date),
-        "{{UNTRACED_KM}}": f"{untraced:,}",
-        "{{FAR_KM}}": f"{far:,}",
-        "{{REMOTE_KM}}": f"{summary.get('remote_km', 0):,}",
-        # The honest range: the untraced figure less the part that sits just
-        # beyond the match radius (most likely a City offset, not a missing
-        # sidewalk), rounded out to 5 km so the page claims no false precision.
-        "{{HONEST_LOW_KM}}": str(int(max(untraced - far, 0) // 5 * 5)),
-        "{{HONEST_HIGH_KM}}": str(int(-(-untraced // 5) * 5)),
-        "{{STREETS}}": f"{summary.get('streets', 0):,}",
-        "{{STREET_MIN_KM}}": f"{config.STREET_MIN_KM:g}",
+        "{{NEW_COUNT}}": f"{summary.get('new', 0):,}",
         "{{MISSING_COUNT}}": f"{summary.get('missing', 0):,}",
-        "{{PARTIAL_COUNT}}": f"{summary.get('partial', 0):,}",
-        "{{FAR_COUNT}}": f"{summary.get('far', 0):,}",
-        "{{SAYS_NO_COUNT}}": f"{summary.get('road_says_no', 0):,}",
-        "{{UNTAGGED_COUNT}}": f"{summary.get('untagged', 0):,}",
-        "{{ON_ROAD_COUNT}}": f"{summary.get('on_road_tag', 0):,}",
-        "{{PROPOSED_COUNT}}": f"{summary.get('proposed', 0):,}",
-        "{{NOSURFACE_COUNT}}": f"{summary.get('nosurface', 0):,}",
-        # The City's own length (Shape__Length, as the landing page quotes it),
-        # not the sampled total, which reprojection moves by ~0.1 km.
-        "{{CITY_KM}}": f"{_load_json(config.COUNT_PATH).get('built_km', summary.get('city_km', 0)):,}",
-        "{{CITY_COUNT}}": f"{summary.get('city', 0):,}",
-        "{{OSM_COUNT}}": f"{summary.get('osm_sidewalk_ways', 0):,}",
-        # The matching rule, stated on the page from the values that ran it.
-        "{{SAMPLE_STEP_M}}": f"{config.SAMPLE_STEP_M:g}",
-        "{{MATCH_M}}": f"{config.MATCH_M:.0f}",
-        "{{FAR_M}}": f"{config.FAR_M:.0f}",
-        "{{REMOTE_M}}": f"{config.REMOTE_M:.0f}",
-        "{{MATCHED_PCT}}": f"{config.MATCHED_SHARE:.0%}",
-        "{{PARTIAL_PCT}}": f"{config.PARTIAL_SHARE:.0%}",
+        "{{SAYS_NO_COUNT}}": f"{summary.get('says_no', 0):,}",
+        "{{NOSEP_COUNT}}": f"{summary.get('nosep', 0):,}",
+        "{{NOBIKE_COUNT}}": f"{summary.get('nobike', 0):,}",
+        "{{UNSIGNED_COUNT}}": f"{summary.get('unsigned_route', 0):,}",
+        "{{PLANNED_COUNT}}": f"{summary.get('planned', 0):,}",
+        "{{SPOT_COUNT}}": f"{summary.get('spot', 0):,}",
+        **{"{{" + k.upper() + "}}": f"{summary.get(k, 0):,}"
+           for k in ("lane_km", "lane_pos_km", "lane_any_km", "buffer_km",
+                     "sep_ok_km", "recent_km", "recent_gap_km")},
+        "{{RECENT_SINCE}}": str(summary.get("recent_since", "")),
+        "{{RASTER_MINZOOM}}": str(min(config.RASTER_ZOOMS)),
         "{{RASTER_MAXZOOM}}": str(max(config.RASTER_ZOOMS)),
         "{{OSM_DATE}}": summary.get("osm_date", build_date),
         "{{OSM_NOTE}}": _osm_note(summary),
@@ -175,11 +160,11 @@ def _build_history_page(gaps_dir, build_date):
         "{{GITHUB_REPO}}": config.GITHUB_REPO,
         "{{RUN_COUNT}}": f"{len(rows):,}",
         "{{FIRST_DATE}}": rows[0]["date"] if rows else build_date,
-        "{{MATCH_M}}": f"{config.MATCH_M:.0f}",
-        "{{STREET_MIN_KM}}": f"{config.STREET_MIN_KM:g}",
+        "{{RECENT_SINCE}}": str(
+            _load_json(config.GAPS_COUNT_PATH).get("recent_since", "")),
         "{{HISTORY_JSON}}": json.dumps(rows),
         "{{HISTORY_ROWS}}": "\n".join(_history_row(r) for r in reversed(rows)),
-        # Only counts, but counts of the City's sidewalks, and like the gap page
+        # Only counts, but counts of the City's facilities, and like the gap page
         # this can be the one page a reader opens: it carries the notice too.
         "{{LICENSE_URL}}": config.LICENSE_URL,
         "{{LICENSE_NOTICE}}": config.LICENSE_NOTICE,
@@ -206,7 +191,7 @@ def _osm_note(summary):
 
     The gap list is only worth acting on if both sides are fresh, and the OSM
     side is the one that moves daily. A page dated today whose OSM data is two
-    weeks old sends a mapper to trace a sidewalk somebody else already traced.
+    weeks old sends a mapper to add a lane somebody else already added.
     """
     if not summary.get("osm_stale"):
         return ""

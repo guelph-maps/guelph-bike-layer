@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guelph Sidewalks &mdash; OSM Coverage Gaps</title>
+<title>Guelph Bike Facilities &mdash; OSM Gaps</title>
 <link rel="stylesheet" href="../index.css">
 <link rel="stylesheet" href="gaps.css">
 <link rel="stylesheet"
@@ -20,34 +20,33 @@
 
 <header class="bar">
   <div class="bar-head">
-    <h1>Guelph Sidewalks &mdash; OSM coverage gaps</h1>
+    <h1>Guelph Bike Facilities &mdash; what OSM is missing</h1>
     <a class="back" href="../">&larr; reference layer</a>
     <a class="back" href="history.html">gaps over time &rarr;</a>
   </div>
   <div class="counts">
-    <div class="count headline"><strong>{{UNTRACED_KM}} km</strong><span>of City sidewalk with no OSM line within {{MATCH_M}}&nbsp;m</span></div>
-    <div class="count"><strong>{{STREETS}}</strong><span>streets with &ge;&nbsp;{{STREET_MIN_KM}}&nbsp;km of it</span></div>
+    <div class="count headline new"><strong>{{NEW_COUNT}}</strong><span>new City installs ({{RECENT_SINCE}}+) not in OSM</span></div>
     <div class="count missing"><strong>{{MISSING_COUNT}}</strong><span>missing</span></div>
-    <div class="count partial"><strong>{{PARTIAL_COUNT}}</strong><span>partial</span></div>
-    <div class="count far"><strong>{{FAR_COUNT}}</strong><span>far</span></div>
-    <div class="count road_says_no"><strong>{{SAYS_NO_COUNT}}</strong><span>road says no</span></div>
-    <div class="count untagged"><strong>{{UNTAGGED_COUNT}}</strong><span>untagged footway</span></div>
-    <div class="count"><strong>{{CITY_KM}} km</strong><span>City sidewalk built</span></div>
-    <div class="count"><strong>{{OSM_COUNT}}</strong><span>OSM sidewalk ways</span></div>
+    <div class="count says_no"><strong>{{SAYS_NO_COUNT}}</strong><span>OSM says no</span></div>
+    <div class="count nosep"><strong>{{NOSEP_COUNT}}</strong><span>no separation</span></div>
+    <div class="count nobike"><strong>{{NOBIKE_COUNT}}</strong><span>footway, no bikes</span></div>
+    <div class="count unsigned_route"><strong>{{UNSIGNED_COUNT}}</strong><span>unsigned route</span></div>
+    <div class="count spot"><strong>{{SPOT_COUNT}}</strong><span>crossrides etc. (not counted)</span></div>
     <div class="count meta-count">City data {{DATA_DATE}} &middot; OSM data {{OSM_DATE}} &middot; compared {{BUILD_DATE}}</div>
   </div>
   {{OSM_NOTE}}
   <p class="note">
-    The City layer is accurate to 1&ndash;5&nbsp;m, and {{FAR_KM}}&nbsp;km of the
-    untraced length sits {{MATCH_M}}&ndash;{{FAR_M}}&nbsp;m from an OSM line, so
-    the honest figure is ~{{HONEST_LOW_KM}}&ndash;{{HONEST_HIGH_KM}}&nbsp;km;
-    {{REMOTE_KM}}&nbsp;km has nothing within {{REMOTE_M}}&nbsp;m. The original
-    audit's &ldquo;OSM has 92%&rdquo; divided total lengths &mdash; it never
-    asked whether they are the same sidewalks.
+    OSM has {{LANE_POS_KM}} of the City's {{LANE_KM}}&nbsp;km of on-road lane
+    on the right side of the road, and the buffer on {{SEP_OK_KM}} of the
+    {{BUFFER_KM}}&nbsp;km where the City records one. Of what the City
+    installed since {{RECENT_SINCE}}, {{RECENT_GAP_KM}} of
+    {{RECENT_KM}}&nbsp;km is not in OSM yet. {{LANE_ANY_KM}}&nbsp;km of City
+    lane is drawn on the road centreline, where its side cannot be read: those
+    are judged on any side, and their rows say so.
   </p>
   <p class="licence">
     <a href="{{LICENSE_URL}}">{{LICENSE_NOTICE}}</a>
-    Source: <a href="{{DATASET_PAGE}}">Sidewalks</a>.
+    Source: <a href="{{DATASET_PAGE}}">Bike Facilities</a>.
   </p>
 </header>
 
@@ -55,49 +54,47 @@
   <div id="gap-map"
        data-geojson="gaps.geojson"
        data-raster="../tiles/raster/{z}/{x}/{y}.png"
+       data-raster-minzoom="{{RASTER_MINZOOM}}"
        data-raster-maxzoom="{{RASTER_MAXZOOM}}"></div>
 
   <aside class="panel">
     <div class="panel-head">
       <div class="controls">
-        <label title="Under {{PARTIAL_PCT}} traced, no OSM line nearby"><span class="swatch missing"></span>
+        <label title="Installed {{RECENT_SINCE}} or later, and not in OSM"><span class="swatch new"></span>
+          <input type="checkbox" id="show-new" checked> New</label>
+        <label title="Not in OSM: no lane tag on its side, no path, no separate cycleway"><span class="swatch missing"></span>
           <input type="checkbox" id="show-missing" checked> Missing</label>
-        <label title="{{PARTIAL_PCT}} to {{MATCHED_PCT}} traced"><span class="swatch partial"></span>
-          <input type="checkbox" id="show-partial" checked> Partial</label>
-        <label title="An OSM line {{MATCH_M}}-{{FAR_M}} m away: check the alignment before adding one"><span class="swatch far"></span>
-          <input type="checkbox" id="show-far" checked> Far</label>
-        <label title="The OSM road says sidewalk=no where the City has one"><span class="swatch road_says_no"></span>
-          <input type="checkbox" id="show-road_says_no" checked> Road says no</label>
-        <label title="Covered by a plain highway=footway: tag it footway=sidewalk"><span class="swatch untagged"></span>
-          <input type="checkbox" id="show-untagged" checked> Untagged</label>
-        <label title="Mapped as sidewalk=* on the road: a valid way to map it ({{ON_ROAD_COUNT}} segments)"><span class="swatch on_road_tag"></span>
-          <input type="checkbox" id="show-on_road_tag"> On road tag</label>
-        <label title="City status PROPOSED: may not be poured yet ({{PROPOSED_COUNT}} segments)"><span class="swatch proposed"></span>
-          <input type="checkbox" id="show-proposed"> Proposed</label>
-        <label title="Matched sidewalk way with no surface=* ({{NOSURFACE_COUNT}} segments)"><span class="swatch nosurface"></span>
-          <input type="checkbox" id="show-nosurface"> No surface</label>
-        <input type="search" id="filter" placeholder="Filter by street or id...">
+        <label title="The OSM road says cycleway=no on the side the City has a lane"><span class="swatch says_no"></span>
+          <input type="checkbox" id="show-says_no" checked> Says no</label>
+        <label title="In OSM, but the City's curb, bollards or painted buffer is not tagged"><span class="swatch nosep"></span>
+          <input type="checkbox" id="show-nosep" checked> No separation</label>
+        <label title="A multi-use path mapped as a footway with no bicycle access"><span class="swatch nobike"></span>
+          <input type="checkbox" id="show-nobike" checked> No bikes</label>
+        <label title="A City signed route with no OSM route=bicycle relation and no cycleway tag"><span class="swatch unsigned_route"></span>
+          <input type="checkbox" id="show-unsigned_route" checked> Unsigned route</label>
+        <label title="City status Planned: not built yet ({{PLANNED_COUNT}} segments)"><span class="swatch planned"></span>
+          <input type="checkbox" id="show-planned"> Planned</label>
+        <label title="Crossrides, intersection treatments and curb cuts: no settled OSM tag, so shown and not counted ({{SPOT_COUNT}})"><span class="swatch spot"></span>
+          <input type="checkbox" id="show-spot"> Crossrides etc.</label>
+        <input type="search" id="filter" placeholder="Filter by street, type, tag or id...">
       </div>
       <p class="hint">
-        Each City sidewalk is sampled every {{SAMPLE_STEP_M}}&nbsp;m; a sample
-        counts as traced when OSM has a pedestrian line (or a road tagged
-        <code>sidewalk=*</code>) within {{MATCH_M}}&nbsp;m, and a segment
-        &ge;&nbsp;{{MATCHED_PCT}} traced is matched. Streets are named after
-        the nearest OSM road, so their count may differ slightly from the
-        audit's 97, which used City centrelines. Click a street to zoom to it
-        and list its segments; click a segment (or a line on the map) to select
-        it, then press <kbd>O</kbd> to open the spot on openstreetmap.org or
-        <kbd>I</kbd> in the iD editor (each segment has the same
-        <strong>OSM&nbsp;&middot;&nbsp;iD</strong> link pair). Cyan lines from
-        z15 are the City's own layer; check current imagery before adding
-        anything.
+        Newest City installs first. Each row says what to add and where:
+        <strong>iD</strong> opens the editor there (with the OSM way selected
+        when there is one), <strong>JOSM</strong> loads the area into a
+        running JOSM through remote control. Click a row to see it on the
+        map, then press <kbd>I</kbd> for iD, <kbd>J</kbd> for JOSM or
+        <kbd>O</kbd> for openstreetmap.org. <code>left</code> and
+        <code>right</code> are relative to the direction of the OSM way.
+        Coloured lines from z{{RASTER_MINZOOM}} are the City's own layer;
+        check current imagery before adding anything.
       </p>
     </div>
     <div class="table-scroll">
       <table id="gap-table">
         <thead>
-          <tr><th class="col-name">Street / segment</th><th>Untraced</th>
-              <th>Segments</th><th>Links</th></tr>
+          <tr><th>Year</th><th class="col-name">Street &middot; facility &middot; tag to add</th>
+              <th>Status</th><th>Open</th></tr>
         </thead>
         <tbody></tbody>
       </table>

@@ -36,11 +36,12 @@ body.app { margin: 0; display: flex; flex-direction: column; }
 /* Status colours: the same palette as the map's lines (COLORS in gaps.js). */
 .count.headline { border-left: 4px solid #c2255c; }
 .count.headline strong { font-size: 1.35rem; }
-.count.missing { border-left: 4px solid #c2255c; }
-.count.partial { border-left: 4px solid #f08c00; }
-.count.far { border-left: 4px solid #7048e8; }
-.count.road_says_no { border-left: 4px solid #e03131; }
-.count.untagged { border-left: 4px solid #1c7ed6; }
+.count.missing { border-left: 4px solid #f08c00; }
+.count.says_no { border-left: 4px solid #e03131; }
+.count.nosep { border-left: 4px solid #1098ad; }
+.count.nobike { border-left: 4px solid #7048e8; }
+.count.unsigned_route { border-left: 4px solid #66a80f; }
+.count.spot { border-left: 4px solid #adb5bd; }
 .count.meta-count {
   display: flex;
   align-items: center;
@@ -87,8 +88,8 @@ body.app { margin: 0; display: flex; flex-direction: column; }
 #gap-map { flex: 1 1 auto; min-width: 0; height: 100%; }
 
 .panel {
-  flex: 0 0 30rem;
-  max-width: 45vw;
+  flex: 0 0 40rem;
+  max-width: 55vw;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -115,14 +116,14 @@ body.app { margin: 0; display: flex; flex-direction: column; }
 
 /* Line swatches: the map draws lines, so the key is a short bar, not a dot. */
 .swatch { display: inline-block; width: 1rem; height: .3rem; border-radius: 2px; }
-.swatch.missing { background: #c2255c; }
-.swatch.partial { background: #f08c00; }
-.swatch.far { background: #7048e8; }
-.swatch.road_says_no { background: #e03131; }
-.swatch.untagged { background: #1c7ed6; }
-.swatch.on_road_tag { background: #868e96; }
-.swatch.proposed { background: #e8590c; }
-.swatch.nosurface { background: #ced4da; }
+.swatch.new { background: #c2255c; }
+.swatch.missing { background: #f08c00; }
+.swatch.says_no { background: #e03131; }
+.swatch.nosep { background: #1098ad; }
+.swatch.nobike { background: #7048e8; }
+.swatch.unsigned_route { background: #66a80f; }
+.swatch.planned { background: #868e96; }
+.swatch.spot { background: #adb5bd; }
 
 /* --- data table --- */
 #gap-table { font-size: .9rem; }
@@ -139,41 +140,19 @@ body.app { margin: 0; display: flex; flex-direction: column; }
 #gap-table tbody tr:hover { background: #f0f8f3; }
 #gap-table tbody tr.selected { background: #e6f4ec; }
 /* Status text, a shade darker than the line colour so it reads on white. */
-.status-missing { color: #a61e4d; font-weight: 600; }
-.status-partial { color: #b35c00; font-weight: 600; }
-.status-far { color: #5f3dc4; font-weight: 600; }
-.status-road_says_no { color: #c92a2a; font-weight: 600; }
-.status-untagged { color: #1864ab; font-weight: 600; }
-.status-on_road_tag { color: #666; font-weight: 600; }
-.status-proposed { color: #c2410c; font-weight: 600; }
-.status-nosurface { color: #868e96; font-weight: 600; }
+.status-new { color: #a61e4d; font-weight: 600; }
+.status-missing { color: #b35c00; font-weight: 600; }
+.status-says_no { color: #c92a2a; font-weight: 600; }
+.status-nosep { color: #0b7285; font-weight: 600; }
+.status-nobike { color: #5f3dc4; font-weight: 600; }
+.status-unsigned_route { color: #4c7a0b; font-weight: 600; }
+.status-planned { color: #666; font-weight: 600; }
+.status-spot { color: #868e96; font-weight: 600; }
 
-/* Street rows lead; segment rows sit indented beneath an expanded street. */
-#gap-table tr.street td { font-weight: 600; border-top: 1px solid var(--border); }
-#gap-table tr.street .seg-n { font-weight: 400; color: var(--muted); font-size: .85em; }
-#gap-table tr.street .caret {
-  display: inline-block;
-  width: 1em;
-  color: var(--muted);
-  transition: transform .1s;
-}
-#gap-table tr.street .caret::before { content: "\25B8"; }
-#gap-table tr.street.open .caret { transform: rotate(90deg); }
-#gap-table tr.seg td { padding-top: .3rem; padding-bottom: .3rem; font-size: .85rem; }
-#gap-table tr.seg td.col-name { padding-left: 1.9rem; }
-#gap-table tr.seg .len { color: var(--muted); }
-#gap-table td.chips { white-space: normal; }
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: .2rem;
-  margin: 0 .45rem 0 0;
-  font-weight: 400;
-  font-size: .82rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.chip i { display: inline-block; width: .7rem; height: .25rem; border-radius: 2px; }
+#gap-table tr.seg td { vertical-align: top; }
+#gap-table .len { color: var(--muted); font-weight: 400; font-size: .85em; }
+/* The tag to add: copyable as is, so it wraps at its own "+" joins only. */
+#gap-table code.tag { font-size: .8rem; background: var(--code-bg); padding: 0 .25em; }
 #gap-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #gap-table .osm-blank { color: var(--muted); }
 #gap-table .osm-links { white-space: nowrap; }

@@ -1,52 +1,52 @@
-// Gap-review page: City raster layer + gap segments, driven by a street table.
+// Gap-review page: City raster layer + gap segments, driven by a work list.
 //
-// The buildings layer's page, for lines. Two things change. The segments are
-// drawn as polylines coloured by status (on a canvas, preferCanvas, since the
-// off-by-default statuses add a few thousand of them). And the table leads
-// with streets, not segments: a mapper walks or traces a street at a time,
-// and 3,000 rows of 80 m segments say nothing about where the work is. A
-// street's row expands into its segment rows.
+// The sidewalks layer's page, flattened. Its gaps were thousands of short
+// segments, so it led with streets; here the list is tens of rows and the
+// question is "what did the City build lately that OSM does not have", so the
+// table is one row per job, newest install first, each carrying the tag to
+// add and links that open the spot in iD or JOSM. A job is the City segments
+// of one street that need the same tag: the City cuts a street into pieces
+// at every block, and four rows saying "Hearn Avenue, add it to a route"
+// would be one piece of work.
 
 (function () {
   "use strict";
 
   // Order is the checkbox / count-chip order. Default-on statuses first.
-  var STATUSES = ["missing", "partial", "far", "road_says_no", "untagged",
-                  "on_road_tag", "proposed", "nosurface"];
+  var STATUSES = ["new", "missing", "says_no", "nosep", "nobike",
+                  "unsigned_route", "planned", "spot"];
   var COLORS = {
-    missing: "#c2255c", partial: "#f08c00", far: "#7048e8",
-    road_says_no: "#e03131", untagged: "#1c7ed6", on_road_tag: "#868e96",
-    proposed: "#e8590c", nosurface: "#ced4da",
+    new: "#c2255c", missing: "#f08c00", says_no: "#e03131", nosep: "#1098ad",
+    nobike: "#7048e8", unsigned_route: "#66a80f", planned: "#868e96",
+    spot: "#adb5bd",
   };
   var LABELS = {
-    missing: "missing", partial: "partial", far: "far",
-    road_says_no: "road says no", untagged: "untagged", on_road_tag: "on road tag",
-    proposed: "proposed", nosurface: "no surface",
+    new: "new", missing: "missing", says_no: "OSM says no",
+    nosep: "no separation", nobike: "no bikes",
+    unsigned_route: "unsigned route", planned: "planned", spot: "not counted",
   };
-  // A street's total counts only these: untraced length a mapper can add.
-  // "untagged" etc. are covered already, so their `untraced` is not work.
-  var GAP = { missing: 1, partial: 1, far: 1, road_says_no: 1 };
-  var NONAME = "(no named road nearby)";
-  var WEIGHT = 4, SELECTED_WEIGHT = 8;
+  // Jobs sort by status rank first only to keep "new" on top; within the
+  // work statuses it is the install year that orders the list.
+  var RANK = { new: 0, missing: 1, says_no: 1, nosep: 1, nobike: 1,
+               unsigned_route: 1, planned: 2, spot: 3 };
+  var WEIGHT = 5, SELECTED_WEIGHT = 9;
+  // Metres of padding around a job for the JOSM download box.
+  var PAD_M = 40;
+  var JOSM = "http://127.0.0.1:8111/load_and_zoom";
 
   var map;
   var features = [];
-  var lines = [];        // L.Polyline per feature, indexed like features
-  var streets = [];      // {name, km, counts, idx: [feature index...]}
-  var streetOf = [];     // feature index -> street index
-  var expanded = {};     // street index -> true while its segments are listed
-  var hits = [];         // feature index -> passes the status + text filter
-  var selectedRow = null, selectedStreetRow = null;
-  var selectedIndex = null;  // feature index of the current selection
-  var apply = function () {};
+  var lines = [];          // L.Polyline per feature, indexed like features
+  var jobs = [];           // {idx: [feature index...], p, length, untraced, way, mid, bounds}
+  var jobOf = [];          // feature index -> job index
+  var selectedRow = null;
+  var selectedJob = null;  // job index of the current selection
 
   function init() {
     var el = document.getElementById("gap-map");
     if (!el || typeof L === "undefined" || !el.dataset.geojson) {
       return;
     }
-    // A wider hit tolerance than the canvas default: a 4 px line is a hard
-    // target, and most clicks here are meant for one.
     map = L.map(el, { preferCanvas: true, renderer: L.canvas({ tolerance: 6 }) })
       .setView([43.5448, -80.2482], 13);
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -57,10 +57,10 @@
     }).addTo(map);
     if (el.dataset.raster) {
       L.tileLayer(el.dataset.raster, {
-        minZoom: 15,
+        minZoom: parseInt(el.dataset.rasterMinzoom, 10),
         maxNativeZoom: parseInt(el.dataset.rasterMaxzoom, 10),
         maxZoom: 19,
-        opacity: 0.85,
+        opacity: 0.6,
       }).addTo(map);
     }
 
@@ -75,10 +75,10 @@
 
   function render(data) {
     features = data.features || [];
-
     features.forEach(function (f, i) {
       var g = f.geometry;
       f._mid = midpoint(g);
+      f._bounds = bounds(g);
       var latlngs = L.GeoJSON.coordsToLatLngs(g.coordinates,
         g.type === "MultiLineString" ? 1 : 0);
       var line = L.polyline(latlngs, {
@@ -86,57 +86,71 @@
         weight: WEIGHT,
         opacity: 0.9,
       });
-      line.bindPopup(function () { return popupHtml(f); });
+      line.bindPopup(function () { return popupHtml(f, i); });
       line.on("click", function (ev) {
         L.DomEvent.stopPropagation(ev);
-        select(i, false, ev.latlng);
+        select(jobOf[i], false, ev.latlng, i);
       });
       lines[i] = line;
     });
-
-    groupStreets();
+    groupJobs();
     buildTable();
     wireControls();
   }
 
-  // One group per OSM road name. Its km is the untraced length of its gap
-  // segments only; the per-status counts cover every listed segment, so a
-  // street that only has off-by-default segments still has a row to show
-  // when those statuses are switched on.
-  function groupStreets() {
-    var byName = {};
+  // One job per status, street, facility, buffer, year and tag (the tag
+  // carries the side, so a street's two lanes stay two jobs). Spot rows are
+  // not work, and stay one row each.
+  function groupJobs() {
+    var byKey = {};
     features.forEach(function (f, i) {
       var p = f.properties;
-      var name = p.street || NONAME;
-      var s = byName[name];
-      if (!s) {
-        s = byName[name] = { name: name, km: 0, counts: {}, idx: [] };
-        streets.push(s);
+      var key = p.status === "spot" ? "spot#" + i :
+        [p.status, p.gap, p.street, p.type, p.buffer, p.year, p.tag].join("|");
+      if (byKey[key] === undefined) {
+        byKey[key] = jobs.length;
+        jobs.push({ idx: [], p: p, length: 0, untraced: 0, ways: {},
+                    bounds: null, mid: null, longest: -1, maxId: 0 });
       }
-      s.idx.push(i);
-      s.counts[p.status] = (s.counts[p.status] || 0) + 1;
-      if (GAP[p.status]) { s.km += (p.untraced || 0) / 1000; }
-    });
-    streets.sort(function (a, b) {
-      // The unnamed bucket is a remainder, not a street: always last.
-      if ((a.name === NONAME) !== (b.name === NONAME)) {
-        return a.name === NONAME ? 1 : -1;
+      var job = jobs[byKey[key]];
+      job.idx.push(i);
+      job.length += p.length || 0;
+      job.untraced += p.untraced || 0;
+      job.maxId = Math.max(job.maxId, p.id || 0);
+      if (p.way != null) {
+        job.ways[p.way] = (job.ways[p.way] || 0) + (p.length || 0);
       }
-      return (b.km - a.km) || (b.idx.length - a.idx.length) ||
-        (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+      if ((p.length || 0) > job.longest) {
+        job.longest = p.length || 0;
+        job.mid = f._mid;
+      }
+      var b = f._bounds;
+      job.bounds = job.bounds
+        ? [Math.min(job.bounds[0], b[0]), Math.min(job.bounds[1], b[1]),
+           Math.max(job.bounds[2], b[2]), Math.max(job.bounds[3], b[3])]
+        : b;
     });
-    streets.forEach(function (s, si) {
-      s.idx.sort(function (a, b) {
-        var pa = features[a].properties, pb = features[b].properties;
-        return ((pb.untraced || 0) - (pa.untraced || 0)) ||
-          ((pb.length || 0) - (pa.length || 0));
+    jobs.forEach(function (job) {
+      // The OSM way most of the job is about: the one iD and JOSM select.
+      var best = null, bestM = -1;
+      Object.keys(job.ways).forEach(function (w) {
+        if (job.ways[w] > bestM) { bestM = job.ways[w]; best = w; }
       });
-      s.idx.forEach(function (i) { streetOf[i] = si; });
+      job.way = best;
+    });
+    // Newest install first; then the higher City id (it rises with every row
+    // the City adds); then the longer job.
+    jobs.sort(function (a, b) {
+      return (RANK[a.p.status] - RANK[b.p.status]) ||
+        ((b.p.year || 0) - (a.p.year || 0)) || (b.maxId - a.maxId) ||
+        (b.untraced - a.untraced);
+    });
+    jobs.forEach(function (job, j) {
+      job.idx.forEach(function (i) { jobOf[i] = j; });
     });
   }
 
-  // Point halfway along the longest part, as [lat, lng]: where O / I and the
-  // link pair send the mapper. A vertex average lands off a curved sidewalk.
+  // Point halfway along the longest part, as [lat, lng].
   function midpoint(geom) {
     var parts = geom.type === "MultiLineString"
       ? geom.coordinates : [geom.coordinates];
@@ -159,185 +173,185 @@
     return [best[0][1], best[0][0]];
   }
 
+  // [south, west, north, east] of a geometry, padded by PAD_M.
+  function bounds(geom) {
+    var parts = geom.type === "MultiLineString"
+      ? geom.coordinates : [geom.coordinates];
+    var s = 90, w = 180, n = -90, e = -180;
+    parts.forEach(function (pts) {
+      pts.forEach(function (p) {
+        s = Math.min(s, p[1]); n = Math.max(n, p[1]);
+        w = Math.min(w, p[0]); e = Math.max(e, p[0]);
+      });
+    });
+    var dLat = PAD_M / 111320;
+    var dLon = PAD_M / (111320 * Math.cos((s + n) / 2 * Math.PI / 180));
+    return [s - dLat, w - dLon, n + dLat, e + dLon];
+  }
+
   function partLength(pts) {
     var len = 0;
     for (var k = 1; k < pts.length; k++) { len += segLength(pts[k - 1], pts[k]); }
     return len;
   }
 
-  // Equirectangular length in degrees of latitude: only ever compared with
-  // itself, so the unit does not matter, but longitude must be shrunk by
-  // cos(lat) or an east-west part reads 1.4x longer than it is at Guelph.
   function segLength(a, b) {
     var dx = (b[0] - a[0]) * Math.cos(a[1] * Math.PI / 180);
     var dy = b[1] - a[1];
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  // Where to send the user for a segment: the openstreetmap.org view and the
-  // iD editor, centred on its midpoint.
-  function osmTargets(f) {
-    var c = f._mid;
+  // Where each link sends the mapper: openstreetmap.org, iD (with the way
+  // the job is about selected), and JOSM remote control (the padded box
+  // downloaded, and that way selected).
+  function targets(job) {
+    var c = job.mid;
     if (!c) { return null; }
+    var way = job.way;
     var ll = c[0].toFixed(6) + "/" + c[1].toFixed(6);
+    var b = job.bounds;
     return {
       osm: "https://www.openstreetmap.org/#map=19/" + ll,
-      id: "https://www.openstreetmap.org/edit#map=20/" + ll,
+      id: "https://www.openstreetmap.org/edit?editor=id" +
+        (way != null ? "&way=" + encodeURIComponent(way) : "") +
+        "#map=19/" + ll,
+      josm: JOSM + "?left=" + b[1].toFixed(6) + "&right=" + b[3].toFixed(6) +
+        "&top=" + b[2].toFixed(6) + "&bottom=" + b[0].toFixed(6) +
+        (way != null ? "&select=way" + encodeURIComponent(way) : "") +
+        "&changeset_source=" +
+        encodeURIComponent("City of Guelph Bike Facilities"),
     };
   }
 
-  // "OSM · iD" link pair shared by the table and the popups, plus a link to
-  // the OSM way the status is about, when there is one: the footway to
-  // retag, the road saying sidewalk=no, the road carrying sidewalk=*.
-  function osmPairHtml(f) {
-    var t = osmTargets(f);
-    var h = "";
-    if (t) {
-      h = '<a href="' + t.osm + '" target="_blank" rel="noopener" ' +
-        'title="View on openstreetmap.org (hotkey: O)">OSM</a> &middot; ' +
-        '<a href="' + t.id + '" target="_blank" rel="noopener" ' +
-        'title="Open in the iD editor (hotkey: I)">iD</a>';
-    }
-    var way = f.properties.way;
-    if (way != null) {
-      h += (h ? " &middot; " : "") +
-        '<a href="https://www.openstreetmap.org/way/' + encodeURIComponent(way) +
-        '" target="_blank" rel="noopener" title="' + esc(wayTitle(f)) +
-        '">OSM way</a>';
-    }
-    return h;
+  // JOSM listens on loopback; a page served over https may still call it.
+  // no-cors: the reply is opaque, but a refused connection still rejects.
+  function openJosm(url, link) {
+    fetch(url, { mode: "no-cors" }).then(function () {
+      flash(link, "sent");
+    }, function () {
+      flash(link, "JOSM?");
+      alert("JOSM did not answer. Start JOSM and enable Preferences > " +
+            "Remote Control, then try again.");
+    });
   }
 
-  function wayTitle(f) {
-    switch (f.properties.status) {
-      case "untagged": return "The plain footway to tag footway=sidewalk";
-      case "road_says_no": return "The road tagged sidewalk=no";
-      case "on_road_tag": return "The road carrying sidewalk=*";
-      case "nosurface": return "The sidewalk way with no surface=*";
-      default: return "The OSM way this status is about";
+  function flash(link, text) {
+    if (!link) { return; }
+    var old = link.textContent;
+    link.textContent = text;
+    setTimeout(function () { link.textContent = old; }, 1500);
+  }
+
+  function linksHtml(job) {
+    var t = targets(job);
+    if (!t) { return '<span class="osm-blank">&mdash;</span>'; }
+    var h = '<a href="' + esc(t.id) + '" target="_blank" rel="noopener" ' +
+      'title="Open here in the iD editor (hotkey: I)">iD</a> &middot; ' +
+      '<a href="' + esc(t.josm) + '" class="josm" ' +
+      'title="Load this area into JOSM via remote control (hotkey: J)">JOSM</a> &middot; ' +
+      '<a href="' + esc(t.osm) + '" target="_blank" rel="noopener" ' +
+      'title="View on openstreetmap.org (hotkey: O)">OSM</a>';
+    if (job.way != null) {
+      h += ' &middot; <a href="https://www.openstreetmap.org/way/' +
+        encodeURIComponent(job.way) + '" target="_blank" rel="noopener" ' +
+        'title="The OSM way this row is about">way</a>';
     }
+    return '<span class="osm-links">' + h + "</span>";
   }
 
-  function segLabel(p) {
-    return p.id != null ? "#" + p.id : "(no id)";
+  function facility(p) {
+    var bits = [p.type || "facility"];
+    if (p.buffer) { bits.push(p.buffer.toLowerCase() + " buffer"); }
+    return bits.join(", ");
   }
 
-  function popupHtml(f) {
+  function sideNote(p) {
+    return p.side === "any"
+      ? "side unclear (City line on the centreline)" : "";
+  }
+
+  function popupHtml(f, i) {
     var p = f.properties;
     var bits = [];
     if (p.length != null) { bits.push(p.length.toLocaleString() + " m"); }
-    if (GAP[p.status] && p.untraced) {
-      bits.push(p.untraced.toLocaleString() + " m untraced");
-    }
-    var more = [];
-    if (p.surface) { more.push(p.surface); }
-    if (p.width != null) { more.push(p.width + " m wide"); }
-    if (p.installed != null) { more.push("installed " + p.installed); }
-    var h = "<strong>" + esc(p.street || NONAME) + "</strong><br>" +
-      "Sidewalk " + esc(segLabel(p)) + " &middot; " +
+    if (p.year) { bits.push("installed " + p.year); }
+    if (p.id != null) { bits.push("City #" + p.id); }
+    var h = "<strong>" + esc(p.street || "(unnamed)") + "</strong><br>" +
+      esc(facility(p)) + " &middot; " +
       '<span class="status-' + p.status + '">' + LABELS[p.status] + "</span>" +
-      (bits.length ? "<br>" + bits.join(" &middot; ") : "") +
-      (more.length ? "<br>" + esc(more.join(" · ")) : "");
-    var links = osmPairHtml(f);
-    if (links) { h += "<br>" + links; }
-    return h;
-  }
-
-  function fmtKm(km) {
-    return km >= 0.05 ? km.toFixed(1) + " km" : "&mdash;";
-  }
-
-  function chipsHtml(counts) {
-    return STATUSES.filter(function (s) { return counts[s]; }).map(function (s) {
-      return '<span class="chip" data-status="' + s + '" title="' +
-        counts[s] + " " + LABELS[s] + '"><i style="background:' + COLORS[s] +
-        '"></i>' + counts[s] + "</span>";
-    }).join("");
+      (p.gap ? " (" + esc(LABELS[p.gap] || p.gap) + ")" : "") +
+      "<br>" + bits.join(" &middot; ");
+    if (p.tag) { h += "<br>Add: <code>" + esc(p.tag) + "</code>"; }
+    return h + "<br>" + linksHtml(jobs[jobOf[i]]);
   }
 
   function buildTable() {
     var tbody = document.querySelector("#gap-table tbody");
     var html = [];
-    streets.forEach(function (s, si) {
-      html.push('<tr class="street" data-s="' + si + '">' +
-        '<td class="col-name"><span class="caret"></span>' + esc(s.name) +
-        ' <span class="seg-n"></span></td>' +
-        '<td class="num">' + fmtKm(s.km) + "</td>" +
-        '<td class="chips">' + chipsHtml(s.counts) + "</td><td></td></tr>");
-      s.idx.forEach(function (i) {
-        var p = features[i].properties;
-        var links = osmPairHtml(features[i]);
-        html.push('<tr class="seg" data-i="' + i + '" data-status="' +
-          p.status + '">' +
-          '<td class="col-name">' + esc(segLabel(p)) +
-          (p.length != null ? ' <span class="len">&middot; ' +
-            p.length.toLocaleString() + " m</span>" : "") + "</td>" +
-          '<td class="num">' + (p.untraced ? p.untraced.toLocaleString() +
-            " m" : "&mdash;") + "</td>" +
-          '<td class="status-' + p.status + '">' + LABELS[p.status] + "</td>" +
-          "<td>" + (links ? '<span class="osm-links">' + links + "</span>"
-                          : '<span class="osm-blank">&mdash;</span>') +
-          "</td></tr>");
-      });
+    jobs.forEach(function (job, j) {
+      var p = job.p;
+      var note = sideNote(p);
+      var n = job.idx.length;
+      html.push('<tr class="seg" data-j="' + j + '" data-status="' + p.status + '">' +
+        '<td class="num">' + (p.year || "&mdash;") + "</td>" +
+        '<td class="col-name"><strong>' + esc(p.street || "(unnamed)") +
+        "</strong> &middot; " + esc(facility(p)) +
+        ' <span class="len">&middot; ' + job.length.toLocaleString() + " m" +
+        (n > 1 ? " in " + n + " pieces" : "") + "</span>" +
+        (p.tag ? '<br><code class="tag">' + esc(p.tag) + "</code>" : "") +
+        (note ? '<br><span class="len">' + esc(note) + "</span>" : "") +
+        "</td>" +
+        '<td class="status-' + p.status + '">' + LABELS[p.status] +
+        (p.gap ? '<br><span class="len">' + esc(LABELS[p.gap] || p.gap) +
+          "</span>" : "") + "</td>" +
+        "<td>" + linksHtml(job) + "</td></tr>");
     });
     tbody.innerHTML = html.join("");
 
     tbody.addEventListener("click", function (ev) {
-      if (ev.target.closest("a")) { return; }  // let OSM links work
-      var tr = ev.target.closest("tr");
-      if (!tr) { return; }
-      if (tr.classList.contains("street")) {
-        toggleStreet(parseInt(tr.dataset.s, 10));
-      } else {
-        select(parseInt(tr.dataset.i, 10), true);
+      var a = ev.target.closest("a");
+      if (a) {
+        if (a.classList.contains("josm")) {
+          ev.preventDefault();
+          openJosm(a.href, a);
+        }
+        return;  // let the other links work
       }
+      var tr = ev.target.closest("tr");
+      if (tr) { select(parseInt(tr.dataset.j, 10), true); }
+    });
+    // Popups are built on the map, outside the table: same JOSM handling.
+    document.getElementById("gap-map").addEventListener("click", function (ev) {
+      var a = ev.target.closest && ev.target.closest("a.josm");
+      if (a) { ev.preventDefault(); openJosm(a.href, a); }
     });
   }
 
-  // Expand a street (and fit the map to its visible segments), or collapse it.
-  function toggleStreet(si) {
-    var s = streets[si];
-    expanded[si] = !expanded[si];
-    if (selectedStreetRow) { selectedStreetRow.classList.remove("selected"); }
-    selectedStreetRow = null;
-    if (expanded[si]) {
-      // Collapsing is putting a street away, not choosing it: only an
-      // expanded street is marked as the current one.
-      selectedStreetRow = document.querySelector('#gap-table tr.street[data-s="' + si + '"]');
-      if (selectedStreetRow) { selectedStreetRow.classList.add("selected"); }
-      var shown = s.idx.filter(function (i) { return hits[i]; });
-      var group = L.featureGroup((shown.length ? shown : s.idx).map(function (i) {
-        return lines[i];
-      }));
-      map.fitBounds(group.getBounds(), { maxZoom: 18, padding: [40, 40] });
+  // Select a job: thicken its lines, fit the map, open a popup, mark its row.
+  // ``i`` is the line that was clicked, when it came from the map.
+  function select(j, fromTable, at, i) {
+    var job = jobs[j];
+    if (!job) { return; }
+    if (selectedJob != null) {
+      jobs[selectedJob].idx.forEach(function (k) {
+        lines[k].setStyle({ weight: WEIGHT });
+      });
     }
-    apply();
-  }
-
-  // Select a segment: thicken it, fit the map, open its popup, mark its row.
-  function select(i, fromTable, at) {
-    var f = features[i];
-    if (!f) { return; }
-    if (selectedIndex != null && lines[selectedIndex]) {
-      lines[selectedIndex].setStyle({ weight: WEIGHT });
-    }
-    selectedIndex = i;
-    var line = lines[i];
-    line.setStyle({ weight: SELECTED_WEIGHT });
-    line.bringToFront();
+    selectedJob = j;
+    job.idx.forEach(function (k) {
+      lines[k].setStyle({ weight: SELECTED_WEIGHT });
+      if (map.hasLayer(lines[k])) { lines[k].bringToFront(); }
+    });
     if (fromTable) {
-      map.fitBounds(line.getBounds(), { maxZoom: 19, padding: [60, 60] });
+      map.fitBounds([[job.bounds[0], job.bounds[1]], [job.bounds[2], job.bounds[3]]],
+                    { maxZoom: 18, padding: [40, 40] });
     }
+    var line = lines[i != null ? i : job.idx[0]];
     if (map.hasLayer(line)) {
-      line.openPopup(at || (f._mid ? L.latLng(f._mid[0], f._mid[1]) : undefined));
+      line.openPopup(at || (job.mid ? L.latLng(job.mid[0], job.mid[1]) : undefined));
     }
-
-    // A segment picked on the map may belong to a collapsed street: open it
-    // so the row exists to highlight.
-    var si = streetOf[i];
-    if (!expanded[si]) { expanded[si] = true; apply(); }
     if (selectedRow) { selectedRow.classList.remove("selected"); }
-    var tr = document.querySelector('#gap-table tr.seg[data-i="' + i + '"]');
+    var tr = document.querySelector('#gap-table tr.seg[data-j="' + j + '"]');
     if (tr) {
       tr.classList.add("selected");
       selectedRow = tr;
@@ -351,51 +365,39 @@
       boxes[s] = document.getElementById("show-" + s);
     });
     var filter = document.getElementById("filter");
-    var streetRows = document.querySelectorAll("#gap-table tr.street");
-    var segRows = {};
+    var rows = {};
     Array.prototype.forEach.call(
       document.querySelectorAll("#gap-table tr.seg"),
-      function (tr) { segRows[tr.dataset.i] = tr; });
+      function (tr) { rows[tr.dataset.j] = tr; });
 
     function statusOn(status) {
       var b = boxes[status];
       return b ? b.checked : true;
     }
 
-    // A segment passes when its status is on and the filter text is empty,
-    // in its street's name, or in its City id / OSM way id. A street row
-    // shows while any of its segments pass; a segment row shows when its
-    // street is expanded, or when the filter found it by id (so typing an id
-    // lands on the row without hunting for its street).
-    apply = function () {
+    // A job shows when its status is on and the filter text is empty or
+    // found in its street, facility, tag, year, OSM way or any City id.
+    function apply() {
       var q = filter.value.trim().toLowerCase();
-      streets.forEach(function (s, si) {
-        var nameHit = !q || s.name.toLowerCase().indexOf(q) > -1;
-        var any = 0;
-        s.idx.forEach(function (i) {
-          var p = features[i].properties;
-          var idHit = !!q && (String(p.id == null ? "" : p.id).indexOf(q) > -1 ||
-            String(p.way == null ? "" : p.way).indexOf(q) > -1);
-          var hit = statusOn(p.status) && (nameHit || idHit);
-          hits[i] = hit;
-          if (hit) { any++; }
-          segRows[i].style.display =
-            hit && (expanded[si] || (idHit && !nameHit)) ? "" : "none";
+      jobs.forEach(function (job, j) {
+        var p = job.p;
+        var ids = job.idx.map(function (i) { return features[i].properties.id; });
+        var text = [p.street, p.type, p.buffer, p.tag, p.year, job.way,
+                    LABELS[p.status]].concat(ids).join(" ").toLowerCase();
+        var hit = statusOn(p.status) && (!q || text.indexOf(q) > -1);
+        rows[j].style.display = hit ? "" : "none";
+        job.idx.forEach(function (i) {
           var m = lines[i];
           if (hit && !map.hasLayer(m)) { map.addLayer(m); }
           else if (!hit && map.hasLayer(m)) { map.removeLayer(m); }
         });
-        var tr = streetRows[si];
-        tr.style.display = any ? "" : "none";
-        tr.classList.toggle("open", !!expanded[si]);
-        // How many of its segments the current filter shows, beside the name.
-        tr.querySelector(".seg-n").textContent =
-          any ? "(" + any + ")" : "";
       });
-      if (selectedIndex != null && map.hasLayer(lines[selectedIndex])) {
-        lines[selectedIndex].bringToFront();
+      if (selectedJob != null) {
+        jobs[selectedJob].idx.forEach(function (i) {
+          if (map.hasLayer(lines[i])) { lines[i].bringToFront(); }
+        });
       }
-    };
+    }
 
     STATUSES.forEach(function (k) {
       if (boxes[k]) { boxes[k].addEventListener("change", apply); }
@@ -403,17 +405,20 @@
     filter.addEventListener("input", apply);
     apply();
 
-    // O / I open the selected segment on openstreetmap.org / in the iD editor.
+    // I / J / O open the selected job in iD, JOSM or on openstreetmap.org.
     document.addEventListener("keydown", function (ev) {
       if (ev.ctrlKey || ev.metaKey || ev.altKey) { return; }
       if (/^(input|textarea|select)$/i.test(ev.target.tagName)) { return; }
       var key = ev.key.toLowerCase();
-      if (key !== "o" && key !== "i") { return; }
-      if (selectedIndex == null) { return; }
-      var t = osmTargets(features[selectedIndex]);
+      if (["o", "i", "j"].indexOf(key) < 0 || selectedJob == null) { return; }
+      var t = targets(jobs[selectedJob]);
       if (!t) { return; }
       ev.preventDefault();
-      window.open(key === "o" ? t.osm : t.id, "_blank", "noopener");
+      if (key === "j") {
+        openJosm(t.josm, selectedRow && selectedRow.querySelector("a.josm"));
+      } else {
+        window.open(key === "o" ? t.osm : t.id, "_blank", "noopener");
+      }
     });
   }
 
