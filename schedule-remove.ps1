@@ -1,4 +1,4 @@
-$taskName = "kk-GuelphSidewalksLayer"
+$taskName = "kk-GuelphBikeLayer"
 
 Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 
