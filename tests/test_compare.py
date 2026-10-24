@@ -3,9 +3,11 @@
 Carried over from the buildings layer, whose tests pin the failure that
 actually happened there: overpass-api.de answered 504 two weeks running, the
 single attempt gave up, and the run silently compared against a stale cache.
-This layer adds two refusals on top. A reply under OSM_MIN_ELEMENTS is a
+This layer adds three refusals on top. A reply under OSM_MIN_ELEMENTS is a
 regional instance answering an out-of-region bbox, and believing it would
-report every City sidewalk as missing. A reply whose timestamp_osm_base is
+report every City facility as missing. A reply with fewer than
+OSM_MIN_ROUTES bicycle route relations lost its relation half, and believing
+it would call every signed route unsigned. A reply whose timestamp_osm_base is
 older than OSM_MAX_AGE_DAYS -- or that does not state one at all -- is a
 lagging mirror, and believing it would print months-old OSM as this week's.
 """
@@ -35,8 +37,14 @@ def _stamp(age):
 OSM_BASE = _stamp(timedelta(minutes=2))
 
 
-def _reply(n=FLOOR + 1, stamp=OSM_BASE):
-    data = {"elements": [{"type": "way", "id": i, "tags": {}, "geometry": []}
+# The route floor the fixtures run under; every _reply carries this many
+# relations among its n elements unless told otherwise.
+ROUTES = 2
+
+
+def _reply(n=FLOOR + 1, stamp=OSM_BASE, routes=ROUTES):
+    data = {"elements": [{"type": "relation" if i < routes else "way", "id": i,
+                          "tags": {}, "geometry": []}
                          for i in range(n)]}
     if stamp is not None:
         data["osm3s"] = {"timestamp_osm_base": stamp}
@@ -91,6 +99,7 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OSM_CACHE_PATH", str(tmp_path / "osm-ways.json"))
     monkeypatch.setattr(config, "OSM_FETCH_PATH", str(tmp_path / ".osm-fetch.json"))
     monkeypatch.setattr(config, "OSM_MIN_ELEMENTS", FLOOR)
+    monkeypatch.setattr(config, "OSM_MIN_ROUTES", ROUTES)
     monkeypatch.setattr(compare.time, "sleep", lambda _s: None)
     return tmp_path
 
@@ -163,7 +172,7 @@ def test_a_reply_that_is_not_json_is_skipped(paths, monkeypatch):
 
 def test_an_implausibly_small_reply_is_not_accepted(paths, monkeypatch):
     # A regional instance answers a Guelph bbox with HTTP 200 and nothing in
-    # it. Believing it would report every City sidewalk as missing from OSM.
+    # it. Believing it would report every City facility as missing from OSM.
     monkeypatch.setattr(config, "OVERPASS_URLS",
                         ("https://regional.example/api", "https://good.example/api"))
     post = _post({"regional.example": FakeResponse(_reply(n=0)),
@@ -185,9 +194,21 @@ def test_the_floor_itself_is_enough(paths, monkeypatch, n, accepted):
 
 
 def test_the_real_floor_is_set():
-    # About half the first live reply (30,494 ways); zero would wave the empty
-    # regional answer straight through.
-    assert config.OSM_MIN_ELEMENTS >= 10000
+    # About half the first live reply (18,099 elements); zero would wave the
+    # empty regional answer straight through.
+    assert config.OSM_MIN_ELEMENTS >= 5000
+    assert config.OSM_MIN_ROUTES >= 5
+
+
+@pytest.mark.parametrize("routes, accepted", [(ROUTES - 1, False), (ROUTES, True)])
+def test_a_reply_without_its_bicycle_routes_is_not_accepted(paths, monkeypatch,
+                                                            routes, accepted):
+    # The ways can arrive whole while the relation statement came back empty;
+    # every signed route would then read as unsigned.
+    monkeypatch.setattr(compare.requests, "post",
+                        _post({"m.example": FakeResponse(_reply(routes=routes))}))
+    got = compare._try_overpass("https://m.example/api", "q")
+    assert (got is not None) is accepted
 
 
 # --- the age check ----------------------------------------------------------
@@ -376,20 +397,25 @@ def test_the_cache_date_falls_back_to_the_file_mtime(paths):
 
 # --- the query --------------------------------------------------------------
 
-def test_the_query_asks_for_every_road_and_pedestrian_way_in_the_bbox():
+def test_the_query_asks_for_roads_paths_and_bicycle_routes_in_the_bbox():
     q = compare._overpass_query()
     s, w, n, e = config.GUELPH_BBOX
+    bbox = f"({s},{w},{n},{e})"
     assert q.startswith("[out:json]")
     assert f"[timeout:{config.OVERPASS_TIMEOUT - 60}]" in q
-    assert f"({s},{w},{n},{e})" in q
-    assert q.rstrip().endswith("out tags geom;")
-    # Ways only: a sidewalk is never a relation, nor a node.
-    assert "way[" in q and "relation" not in q and "node" not in q
+    # Ways with tags and coordinates; relations with their members' geometry,
+    # clipped to the bbox.
+    assert f"out tags geom{bbox};" in q
+    assert f'relation["route"="bicycle"]{bbox};' in q
+    assert q.rstrip().endswith(f"out geom{bbox};")
+    assert "node" not in q
     regex = q.split('"highway"~"')[1].split('"')[0]
     assert regex.startswith("^(") and regex.endswith(")$")
     values = set(regex[2:-2].split("|"))
     assert values == set(config.ROAD_HIGHWAYS) | set(config.PATH_HIGHWAYS)
-    assert {"footway", "residential", "cycleway", "service"} <= values
+    assert {"footway", "residential", "cycleway", "secondary"} <= values
+    # A parking aisle is never the road a lane is tagged on.
+    assert "service" not in values
 
 
 def test_the_query_is_what_is_posted(paths, monkeypatch):
@@ -411,33 +437,47 @@ def _el(eid, tags, n=2, etype="way"):
     return {"type": etype, "id": eid, "tags": tags, "geometry": pts}
 
 
-def test_osm_ways_sorts_sidewalks_paths_and_roads():
+def _rel(rid, tags, members):
+    return {"type": "relation", "id": rid, "tags": tags, "members": members}
+
+
+def test_osm_ways_sorts_roads_paths_and_bikeways():
     data = {"elements": [
-        _el(1, {"highway": "footway", "footway": "sidewalk"}),
-        _el(2, {"highway": "path", "path": "sidewalk"}),
-        _el(3, {"highway": "footway"}),
-        _el(4, {"highway": "footway", "footway": "crossing"}),
-        _el(5, {"highway": "cycleway"}),
-        _el(6, {"highway": "residential", "sidewalk": "both"}),
-        _el(7, {"highway": "service"}),
+        _el(1, {"highway": "secondary", "cycleway:right": "lane"}),
+        _el(2, {"highway": "residential"}),
+        _el(3, {"highway": "footway", "footway": "sidewalk"}),
+        _el(4, {"highway": "cycleway"}),
+        _el(5, {"highway": "path", "bicycle": "designated"}),
+        _el(6, {"highway": "path"}),
+        _el(7, {"highway": "service"}),                      # not queried, dropped
         _el(8, {"highway": "pedestrian", "area": "yes"}),   # an outline, dropped
-        _el(9, {"highway": "construction"}),                # neither, dropped
-        _el(10, {"highway": "footway"}, n=1),               # one point, dropped
-        _el(11, {"highway": "footway"}, etype="node"),      # not a way, dropped
-        {"type": "way", "id": 12, "tags": {"highway": "footway"}},  # no geometry
-        _el(13, {"highway": "footway", "footway": "sidewalk"}) | {"tags": None},
+        _el(9, {"highway": "footway"}, n=1),                # one point, dropped
+        {"type": "way", "id": 10, "tags": {"highway": "footway"}},  # no geometry
+        _el(11, {"highway": "cycleway"}) | {"tags": None},
     ]}
     osm = compare._osm_ways(data)
-    assert [w["id"] for w in osm["sidewalk"]] == [1, 2]
-    assert [w["id"] for w in osm["other"]] == [3, 4, 5]
-    assert [w["id"] for w in osm["road"]] == [6, 7]
-    assert osm["road"][0]["tags"] == {"highway": "residential", "sidewalk": "both"}
+    assert [w["id"] for w in osm["road"]] == [1, 2]
+    assert [w["id"] for w in osm["path"]] == [3, 4, 5, 6]
+    assert [w["id"] for w in osm["bikeway"]] == [4, 5]
+    assert osm["route"] == []
+
+
+def test_osm_ways_flattens_route_relations_into_member_lines():
+    pts = [{"lat": 43.54, "lon": -80.25}, {"lat": 43.54, "lon": -80.249}]
+    data = {"elements": [_rel(77, {"route": "bicycle", "network": "lcn"}, [
+        {"type": "way", "ref": 1, "role": "", "geometry": pts},
+        {"type": "way", "ref": 2, "role": "", "geometry": pts[:1]},  # clipped away
+        {"type": "node", "ref": 3, "role": "", "lat": 43.54, "lon": -80.25},
+        {"type": "way", "ref": 4, "role": ""},  # no geometry at all
+    ])]}
+    osm = compare._osm_ways(data)
+    assert [(w["id"], w["tags"]["network"]) for w in osm["route"]] == [(77, "lcn")]
 
 
 def test_osm_ways_are_metric():
     # 0.001 deg of longitude at 43.54 N is ~80.7 m.
     osm = compare._osm_ways({"elements": [_el(1, {"highway": "footway"})]})
-    g = osm["other"][0]["g"]
+    g = osm["path"][0]["g"]
     assert 79 < g.length < 82
     x, y = g.coords[0]
     assert 500000 < x < 600000 and 4800000 < y < 4850000
@@ -447,4 +487,4 @@ def test_osm_ways_skip_null_geometry_points():
     el = _el(1, {"highway": "footway"}, n=3)
     el["geometry"][1] = None
     osm = compare._osm_ways({"elements": [el]})
-    assert len(osm["other"][0]["g"].coords) == 2
+    assert len(osm["path"][0]["g"].coords) == 2

@@ -81,7 +81,7 @@ def setup(tmp_path, monkeypatch):
 
 
 def _saved(tmp_path):
-    return sorted(tmp_path.glob("sidewalks-*.geojson"))
+    return sorted(tmp_path.glob("bike-*.geojson"))
 
 
 def test_pages_are_assembled_in_order(setup, monkeypatch):
@@ -89,7 +89,7 @@ def test_pages_are_assembled_in_order(setup, monkeypatch):
     monkeypatch.setattr("src.download.requests.get", get)
     status, path = dl.download()
     assert status == "DOWNLOADED"
-    assert os.path.basename(path).startswith("sidewalks-")
+    assert os.path.basename(path).startswith("bike-")
     with open(path, encoding="utf-8") as f:
         doc = json.load(f)
     assert doc["type"] == "FeatureCollection"

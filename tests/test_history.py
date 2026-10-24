@@ -19,24 +19,27 @@ def paths(tmp_path, monkeypatch):
     return tmp_path
 
 
-SUMMARY = {"untraced_km": 41.3, "missing": 520, "partial": 140, "far": 60,
-           "road_says_no": 12, "untagged": 230, "streets": 88, "city_km": 712.4,
-           "covered_km": 671.1, "on_road_tag": 4, "osm_sidewalk_ways": 9000,
+SUMMARY = {"work": 70, "new": 15, "missing": 3, "says_no": 6, "nosep": 22,
+           "nobike": 8, "unsigned_route": 16, "lane_absent_km": 1.5,
+           "lane_no_km": 0.8, "recent_gap_km": 2.4, "city_km": 206.9,
+           "spot": 92, "planned": 0, "lane_km": 124.0, "osm_routes": 17,
            "osm_date": "2026-10-08 12:00Z", "osm_stale": False}
 
 
 def test_a_live_run_is_recorded_with_every_field(paths):
     row = history.record(SUMMARY, day="2026-10-08")
     assert row == {"date": "2026-10-08", "osm_date": "2026-10-08 12:00Z",
-                   "source": "live", "untraced_km": 41.3, "missing": 520,
-                   "partial": 140, "far": 60, "road_says_no": 12,
-                   "untagged": 230, "streets": 88, "city_km": 712.4}
+                   "source": "live", "work": 70, "new": 15, "missing": 3,
+                   "says_no": 6, "nosep": 22, "nobike": 8,
+                   "unsigned_route": 16, "lane_absent_km": 1.5,
+                   "lane_no_km": 0.8, "recent_gap_km": 2.4, "city_km": 206.9}
     assert history.load() == [row]
 
 
 def test_the_row_carries_exactly_the_fields():
-    assert history.FIELDS == ("untraced_km", "missing", "partial", "far",
-                              "road_says_no", "untagged", "streets", "city_km")
+    assert history.FIELDS == ("work", "new", "missing", "says_no", "nosep",
+                              "nobike", "unsigned_route", "lane_absent_km",
+                              "lane_no_km", "recent_gap_km", "city_km")
 
 
 def test_an_absent_field_is_recorded_as_zero(paths):

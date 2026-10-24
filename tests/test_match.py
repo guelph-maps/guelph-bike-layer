@@ -1,17 +1,16 @@
-"""Unit tests for matching City sidewalk lines against OSM's lines.
+"""Unit tests for matching City bike facilities against OSM.
 
 Everything here is synthetic and metric: City lines and OSM ways are shapely
-LineStrings in UTM metres, laid out along y = Y0 so an offset is just a change
-of y. What these pin is the rule in compare's docstring -- how each sample is
-classed, and how the classes add up to one status per City segment -- and the
-one thing that is easy to get wrong when writing such tests: the 15 m match
-radius reaches past the END of a way as well as across it, so a way along half
-of a short City line covers rather more than half of it. The share tests use a
-1 km line so that overrun is small next to the bands.
+LineStrings in UTM metres. The OSM road runs east along y = Y0, so a City
+line at Y0 + dy with dy > 0 lies on the road's LEFT, and the tag that speaks
+for it is cycleway:left. What these pin is the rule in compare's docstring:
+the side a lane is read on, the cross street that must not answer for it,
+the buffer check, the path and route rules, and the statuses they add up to.
 """
 
 import os
 import sys
+from datetime import date
 
 import pytest
 import shapely
@@ -21,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src import compare, config  # noqa: E402
 
 X0, Y0 = 500000.0, 4820000.0
+TODAY = date(2026, 10, 24)
 
 
 def _hline(x0, x1, dy=0.0):
@@ -28,10 +28,19 @@ def _hline(x0, x1, dy=0.0):
     return shapely.LineString([(X0 + x0, Y0 + dy), (X0 + x1, Y0 + dy)])
 
 
-def _city(length=100.0, status="built", dy=0.0, **props):
-    """A City sidewalk ``length`` metres long, starting at X0."""
+def _vline(x, y0, y1):
+    """A metric line along x = X0 + x, from Y0 + y0 to Y0 + y1."""
+    return shapely.LineString([(X0 + x, Y0 + y0), (X0 + x, Y0 + y1)])
+
+
+def _city(ftype="Bike Lane", dy=6.0, length=200.0, status="in_service",
+          onroad=True, year=2017, **props):
+    kind = {"MUP": "mup", "Signed Route": "route", "Crossride": "spot",
+            "Cycle Track": "separated"}.get(ftype, "painted")
     return {
-        "props": {"id": 7, "status": status, **props},
+        "props": {"id": 7, "status": status, "type": ftype, "kind": kind,
+                  "onroad": onroad, "year": year, "street": "City St",
+                  "length": int(length), **props},
         # Not reprojected by match(), only rounded into the gap feature.
         "geom": {"type": "LineString",
                  "coordinates": [[-80.25, 43.54], [-80.249, 43.54]]},
@@ -43,345 +52,306 @@ def _way(wid, g, **tags):
     return {"id": wid, "tags": tags, "g": g}
 
 
-def _osm(sidewalk=(), other=(), road=()):
-    return {"sidewalk": list(sidewalk), "other": list(other), "road": list(road)}
+def _road(wid=1, length=200.0, **tags):
+    tags.setdefault("highway", "secondary")
+    tags.setdefault("name", "Main Street")
+    return _way(wid, _hline(-5, length + 5), **tags)
 
 
-def _beside(dy, length=100.0, overhang=5.0):
-    """A line parallel to a City line of ``length``, ``dy`` m off it.
+def _osm(road=(), path=(), route=()):
+    path = list(path)
+    return {"road": list(road), "path": path,
+            "bikeway": [w for w in path if compare.is_bikeway(w["tags"])],
+            "route": list(route)}
 
-    It runs a few metres past both ends, so an end sample sees the
-    perpendicular distance rather than a corner.
-    """
-    return _hline(-overhang, length + overhang, dy)
+
+def _one(city_item, osm):
+    gaps, _summary = compare.match([city_item], osm, today=TODAY)
+    assert len(gaps) <= 1
+    return gaps[0]["properties"] if gaps else None
 
 
 def _status(city_item, osm):
-    gaps, _summary = compare.match([city_item], osm)
-    assert len(gaps) <= 1
-    return gaps[0]["properties"]["status"] if gaps else None
+    p = _one(city_item, osm)
+    return p["status"] if p else None
 
 
-# --- whole segments ---------------------------------------------------------
+# --- reading a road's tags --------------------------------------------------
 
-def test_a_surfaced_sidewalk_beside_it_is_not_listed():
-    osm = _osm(sidewalk=[_way(1, _beside(5), highway="footway",
-                              footway="sidewalk", surface="concrete")])
-    gaps, summary = compare.match([_city()], osm)
-    assert gaps == []
-    assert summary["untraced_km"] == 0 and summary["covered_km"] == 0.1
-
-
-def test_a_sidewalk_without_surface_is_listed_as_nosurface():
-    osm = _osm(sidewalk=[_way(11, _beside(5), highway="footway",
-                              footway="sidewalk")])
-    gaps, _summary = compare.match([_city()], osm)
-    assert [g["properties"]["status"] for g in gaps] == ["nosurface"]
-    assert gaps[0]["properties"]["way"] == 11
-    assert gaps[0]["properties"]["untraced"] == 0
+@pytest.mark.parametrize("tags, side, value", [
+    ({"cycleway:left": "lane"}, "left", "lane"),
+    ({"cycleway:left": "lane"}, "right", None),
+    ({"cycleway:both": "lane", "cycleway:right": "no"}, "right", "no"),
+    ({"cycleway:both": "track"}, "left", "track"),
+    ({"cycleway": "lane"}, "left", "lane"),
+    # On a oneway road a plain cycleway=lane is the right-hand lane only.
+    ({"cycleway": "lane", "oneway": "yes"}, "left", None),
+    ({"cycleway": "lane", "oneway": "yes"}, "right", "lane"),
+    ({}, "left", None),
+])
+def test_side_value(tags, side, value):
+    assert compare.side_value(tags, side) == value
 
 
-def test_nothing_nearby_is_missing():
+@pytest.mark.parametrize("tags, side, state", [
+    ({"cycleway:left": "lane"}, "left", "pos"),
+    ({"cycleway:left": "separate"}, "left", "pos"),
+    ({"cycleway:left": "no"}, "left", "no"),
+    ({"cycleway:both": "no"}, "left", "no"),
+    ({}, "left", "absent"),
+    ({"bicycle": "designated"}, "left", "pos"),
+    # Any side: positive when any key is.
+    ({"cycleway:right": "lane"}, "any", "pos"),
+    ({"cycleway:right": "no", "cycleway:left": "lane"}, "any", "pos"),
+    ({"cycleway:both": "no"}, "any", "no"),
+])
+def test_lane_state(tags, side, state):
+    assert compare.lane_state(tags, side) == state
+
+
+def test_a_contraflow_lane_accepts_oneway_bicycle_no():
+    tags = {"oneway": "yes", "oneway:bicycle": "no"}
+    assert compare.lane_state(tags, "left") == "absent"
+    assert compare.lane_state(tags, "left", contraflow=True) == "pos"
+
+
+@pytest.mark.parametrize("tags, side, buffer, ok", [
+    ({"cycleway:left:separation": "kerb"}, "left", "Curbed", True),
+    ({"cycleway:both:separation:left": "bollard"}, "left", "Bollard", True),
+    ({"cycleway:right:separation": "kerb"}, "left", "Curbed", False),
+    ({"cycleway:left:buffer": "yes"}, "left", "Painted", True),
+    ({"cycleway:left": "track"}, "left", "Curbed", True),
+    # A track is a curb, not paint: it says nothing about a painted buffer.
+    ({"cycleway:left": "track"}, "left", "Painted", False),
+    ({"cycleway:left": "separate"}, "left", "Curbed", True),
+    ({"cycleway:right:separation": "kerb"}, "any", "Curbed", True),
+    ({}, "left", "Curbed", False),
+])
+def test_has_separation(tags, side, buffer, ok):
+    assert compare.has_separation(tags, side, buffer) is ok
+
+
+@pytest.mark.parametrize("tags, access", [
+    ({"highway": "footway", "footway": "sidewalk"}, "nobike"),
+    ({"highway": "footway", "bicycle": "yes"}, "ok"),
+    ({"highway": "path"}, "ok"),
+    ({"highway": "path", "bicycle": "no"}, "nobike"),
+    ({"highway": "cycleway"}, "ok"),
+    ({"highway": "pedestrian"}, "nobike"),
+])
+def test_bike_access(tags, access):
+    assert compare.bike_access(tags) == access
+
+
+# --- on-road lanes ----------------------------------------------------------
+
+def test_a_lane_on_its_tagged_side_is_not_listed():
+    assert _status(_city(), _osm([_road(**{"cycleway:left": "lane"})])) is None
+
+
+def test_a_lane_tagged_on_the_other_side_only_is_missing():
+    p = _one(_city(), _osm([_road(**{"cycleway:right": "lane"})]))
+    assert p["status"] == "missing"
+    assert p["side"] == "left" and p["way"] == 1
+    assert p["tag"] == "cycleway:left=lane"
+    assert p["untraced"] == 200 and p["street"] == "Main Street"
+
+
+def test_the_side_follows_the_way_direction():
+    # The same City line, the road drawn westward: now it is the right side.
+    road = _way(1, shapely.reverse(_hline(-5, 205)), highway="secondary",
+                **{"cycleway:right": "lane"})
+    assert _status(_city(), _osm([road])) is None
+
+
+def test_a_lane_where_the_road_says_no_is_says_no():
+    p = _one(_city(), _osm([_road(**{"cycleway:both": "no"})]))
+    assert p["status"] == "says_no" and p["tag"] == "cycleway:left=lane"
+
+
+def test_a_recent_install_is_new_and_keeps_its_kind():
+    p = _one(_city(year=2025), _osm([_road(**{"cycleway:both": "no"})]))
+    assert p["status"] == "new" and p["gap"] == "says_no"
+    p = _one(_city(year=2024), _osm([_road()]))
+    assert p["status"] == "missing" and "gap" not in p
+
+
+def test_no_road_at_all_is_missing():
     assert _status(_city(), _osm()) == "missing"
 
 
-def test_a_line_20_m_off_is_far():
-    # Outside MATCH_M, inside FAR_M: the City alignment, not OSM, is suspect.
-    osm = _osm(sidewalk=[_way(1, _beside(20), highway="footway",
-                              footway="sidewalk", surface="concrete")])
-    assert _status(_city(), osm) == "far"
+def test_a_lane_on_the_centreline_is_judged_on_any_side():
+    city = _city(dy=1.0)
+    assert _status(city, _osm([_road(**{"cycleway:right": "lane"})])) is None
+    p = _one(city, _osm([_road()]))
+    assert p["side"] == "any"
+    assert p["tag"].startswith("cycleway:<left|right>=lane")
+    assert "check the side" in p["tag"]
 
 
-def test_a_road_saying_sidewalk_no_is_road_says_no():
-    road = _way(42, _beside(10), highway="residential", sidewalk="no")
-    gaps, summary = compare.match([_city()], _osm(road=[road]))
-    assert [g["properties"]["status"] for g in gaps] == ["road_says_no"]
-    assert gaps[0]["properties"]["way"] == 42
-    assert summary["says_no_km"] == 0.1
+def test_a_cross_street_does_not_answer_for_a_lane():
+    # A north-south road 8 m off the end of the lane, tagged with lanes; the
+    # lane's own road is not mapped. Nearest-road would call the end covered.
+    cross = _way(2, _vline(208, -100, 100), highway="secondary",
+                 **{"cycleway:both": "lane"})
+    city = _city(length=40.0)
+    city["lines"] = [_hline(170, 210, 6.0)]
+    p = _one(city, _osm([cross]))
+    assert p["status"] == "missing" and p["untraced"] == 40
 
 
-def test_a_road_saying_sidewalk_both_is_on_road_tag():
-    road = _way(43, _beside(10), highway="residential", sidewalk="both")
-    gaps, _summary = compare.match([_city()], _osm(road=[road]))
-    assert [g["properties"]["status"] for g in gaps] == ["on_road_tag"]
-    assert gaps[0]["properties"]["way"] == 43
-    assert gaps[0]["properties"]["untraced"] == 0
+def test_the_lanes_own_road_wins_over_a_nearer_cross_street():
+    cross = _way(2, _vline(100, -100, 100), highway="residential",
+                 **{"cycleway:both": "no"})
+    own = _road(**{"cycleway:left": "lane"})
+    assert _status(_city(), _osm([cross, own])) is None
 
 
-def test_sidewalk_separate_says_nothing():
-    # "separate" means the sidewalk is its own way; with no such way in OSM
-    # the City sidewalk is simply missing.
-    road = _way(44, _beside(10), highway="residential", sidewalk="separate")
-    assert _status(_city(), _osm(road=[road])) == "missing"
+def test_a_separate_cycleway_beside_the_lane_covers_it():
+    track = _way(5, _hline(-5, 205, 9.0), highway="cycleway")
+    assert _status(_city(), _osm([_road()], [track])) is None
 
 
-def test_a_plain_footway_is_untagged():
-    fw = _way(5, _beside(5), highway="footway")
-    gaps, _summary = compare.match([_city()], _osm(other=[fw]))
-    assert [g["properties"]["status"] for g in gaps] == ["untagged"]
-    assert gaps[0]["properties"]["way"] == 5
+def test_a_green_contraflow_and_buffered_lane_get_their_extra_tags():
+    p = _one(_city(ftype="Bike Lane - Green", buffer="Painted"), _osm([_road()]))
+    assert p["tag"] == ("cycleway:left=lane + cycleway:left:surface:colour=green"
+                        " + cycleway:left:buffer=yes")
+    p = _one(_city(ftype="Contraflow"), _osm([_road()]))
+    assert p["tag"] == ("cycleway:left=lane + cycleway:left:oneway=-1"
+                        " + oneway:bicycle=no")
+    p = _one(_city(ftype="Cycle Track"), _osm([_road()]))
+    assert p["tag"] == "cycleway:left=track"
 
 
-def test_a_crossing_is_a_path_not_an_untagged_sidewalk():
-    xing = _way(6, _beside(5), highway="footway", footway="crossing")
-    assert _status(_city(), _osm(other=[xing])) is None
+# --- separation -------------------------------------------------------------
+
+def test_a_curbed_lane_without_a_separation_tag_is_nosep():
+    p = _one(_city(buffer="Curbed"), _osm([_road(**{"cycleway:left": "lane"})]))
+    assert p["status"] == "nosep"
+    assert p["tag"] == "cycleway:left:separation=kerb"
+    assert p["way"] == 1 and p["untraced"] == 0
 
 
-def test_a_path_or_cycleway_covers_it():
-    for tags in ({"highway": "path"}, {"highway": "cycleway"}):
-        assert _status(_city(), _osm(other=[_way(8, _beside(5), **tags)])) is None
-
-
-# --- shares -----------------------------------------------------------------
-
-def _cover(covered, length=1000.0):
-    """A surfaced sidewalk 5 m beside the first ``covered`` m of the line."""
-    return _osm(sidewalk=[_way(1, _hline(-5, covered, 5), highway="footway",
-                               footway="sidewalk", surface="concrete")])
-
-
-def test_a_short_partial_way_reaches_past_its_end():
-    # The trap the shares below avoid: on a 100 m line, a way along the first
-    # 50 m covers every sample within 15 m of its end too -- 65%, not 50%.
-    assert _status(_city(100), _cover(50, 100)) == "partial"
-
-
-@pytest.mark.parametrize("covered, expected", [
-    (500, "partial"),   # ~51%
-    (100, "missing"),   # ~11%
-    (750, None),        # ~76%: matched
+@pytest.mark.parametrize("tags", [
+    {"cycleway:left": "lane", "cycleway:left:separation": "kerb"},
+    {"cycleway:left": "track"},
 ])
-def test_the_covered_share_decides(covered, expected):
-    assert _status(_city(1000), _cover(covered)) == expected
+def test_a_curbed_lane_with_its_separation_is_not_listed(tags):
+    assert _status(_city(buffer="Curbed"), _osm([_road(**tags)])) is None
 
 
-def test_a_partial_segment_reports_its_untraced_length():
-    gaps, _summary = compare.match([_city(1000)], _cover(500))
-    p = gaps[0]["properties"]
-    assert p["length"] == 1000
-    assert 470 <= p["untraced"] <= 500
+def test_a_painted_buffer_wants_the_buffer_key():
+    city = _city(buffer="Painted")
+    assert _status(city, _osm([_road(**{"cycleway:left": "lane"})])) == "nosep"
+    assert _status(city, _osm([_road(**{"cycleway:left": "lane",
+                                         "cycleway:left:buffer": "yes"})])) is None
 
 
-# --- proposed ---------------------------------------------------------------
-
-def test_a_proposed_line_with_nothing_is_proposed():
-    gaps, summary = compare.match([_city(status="proposed")], _osm())
-    assert [g["properties"]["status"] for g in gaps] == ["proposed"]
-    # Not a gap in the built network: none of the built totals move.
-    assert summary["city"] == 0 and summary["city_km"] == 0
-    assert summary["untraced_km"] == 0 and summary["missing"] == 0
+def test_a_missing_buffered_lane_is_missing_not_nosep():
+    p = _one(_city(buffer="Rumble Strip"), _osm([_road()]))
+    assert p["status"] == "missing"
+    assert p["tag"] == ("cycleway:left=lane + "
+                        "cycleway:left:separation=rumble_strip")
 
 
-def test_a_proposed_line_already_in_osm_is_not_listed():
-    osm = _osm(sidewalk=[_way(1, _beside(5), highway="footway",
-                              footway="sidewalk")])
-    assert _status(_city(status="proposed"), osm) is None
+# --- off-road paths ---------------------------------------------------------
+
+def _mup(**kw):
+    return _city(ftype="MUP", onroad=False, dy=0.0, **kw)
 
 
-# --- streets ----------------------------------------------------------------
-
-def test_a_gap_carries_the_nearest_named_road():
-    road = _way(9, _beside(10), highway="residential", name="Deerpath Drive")
-    gaps, _summary = compare.match([_city()], _osm(road=[road]))
-    assert gaps[0]["properties"]["status"] == "missing"
-    assert gaps[0]["properties"]["street"] == "Deerpath Drive"
+def test_a_mup_on_a_shared_path_is_not_listed():
+    path = _way(3, _hline(-5, 205, 3.0), highway="path", bicycle="designated")
+    assert _status(_mup(), _osm(path=[path])) is None
 
 
-def test_a_gap_with_no_named_road_near_has_an_empty_street():
-    gaps, _summary = compare.match([_city()], _osm())
-    assert gaps[0]["properties"]["street"] == ""
+def test_a_mup_mapped_as_a_sidewalk_is_nobike():
+    sidewalk = _way(3, _hline(-5, 205, 3.0), highway="footway",
+                    footway="sidewalk")
+    p = _one(_mup(), _osm(path=[sidewalk]))
+    assert p["status"] == "nobike" and p["way"] == 3
+    assert p["tag"] == "bicycle=designated + segregated=no"
 
 
-def test_a_street_is_counted_only_from_the_threshold():
-    # 300 m untraced on Deerpath, 100 m on Elm: only Deerpath reaches the
-    # 0.2 km headline threshold. The lines are 1 km apart so nothing crosses.
-    long_ = _city(300)
-    short = _city(100, dy=1000)
-    roads = [
-        _way(9, _beside(10, 300), highway="residential", name="Deerpath Drive"),
-        _way(10, _hline(-5, 105, 1010), highway="residential", name="Elm Street"),
-    ]
-    gaps, summary = compare.match([long_, short], _osm(road=roads))
-    assert [g["properties"]["street"] for g in gaps] == \
-        ["Deerpath Drive", "Elm Street"]
-    assert summary["streets"] == 1
-    assert summary["gap_km"] == 0.4
+def test_a_mup_with_no_path_is_missing():
+    p = _one(_mup(), _osm())
+    assert p["status"] == "missing"
+    assert p["tag"].startswith("highway=path + bicycle=designated")
 
 
-def test_a_proposed_line_never_counts_toward_a_street():
-    proposed = _city(300, status="proposed")
-    road = _way(9, _beside(10, 300), highway="residential", name="Deerpath Drive")
-    _gaps, summary = compare.match([proposed], _osm(road=[road]))
-    assert summary["streets"] == 0
+def test_a_cycle_track_beside_a_sidewalk_finds_the_cycleway():
+    # The sidewalk is nearer; the cycleway 9 m off is what maps the track.
+    city = _city(ftype="Cycle Track", onroad=False, dy=0.0)
+    sidewalk = _way(3, _hline(-5, 205, 2.0), highway="footway",
+                    footway="sidewalk")
+    cycleway = _way(4, _hline(-5, 205, -9.0), highway="cycleway")
+    assert _status(city, _osm(path=[sidewalk, cycleway])) is None
+    p = _one(city, _osm(path=[sidewalk]))
+    assert p["status"] == "nobike" and p["tag"].startswith("highway=cycleway")
 
 
-# --- the summary ------------------------------------------------------------
+def test_an_off_road_cycle_track_is_covered_by_a_track_tag_on_the_road():
+    city = _city(ftype="Cycle Track", onroad=False, dy=8.0)
+    assert _status(city, _osm([_road(**{"cycleway:left": "track"})])) is None
+
+
+# --- signed routes ----------------------------------------------------------
+
+def _route(**kw):
+    return _city(ftype="Signed Route", dy=0.0, **kw)
+
+
+def test_a_signed_route_on_a_relation_is_not_listed():
+    member = _way(90, _hline(-5, 205), route="bicycle", network="lcn")
+    assert _status(_route(), _osm([_road()], route=[member])) is None
+
+
+def test_a_signed_route_tagged_designated_on_the_road_is_not_listed():
+    road = _road(bicycle="designated", **{"cycleway:both": "no"})
+    assert _status(_route(), _osm([road])) is None
+
+
+def test_a_signed_route_with_nothing_is_unsigned():
+    p = _one(_route(), _osm([_road()]))
+    assert p["status"] == "unsigned_route"
+    assert p["tag"].startswith("route=bicycle relation")
+    p = _one(_route(year=2026), _osm([_road()]))
+    assert p["status"] == "new" and p["gap"] == "unsigned_route"
+
+
+# --- what is listed, and what is counted ------------------------------------
+
+def test_crossrides_are_listed_as_spot_and_never_counted():
+    city = _city(ftype="Crossride", length=12.0, year=2026)
+    gaps, summary = compare.match([city], _osm(), today=TODAY)
+    assert [g["properties"]["status"] for g in gaps] == ["spot"]
+    assert summary["spot"] == 1 and summary["work"] == 0
+    assert summary["new"] == 0 and summary["city"] == 0
+
+
+def test_a_planned_lane_is_planned_unless_osm_has_it():
+    assert _status(_city(status="planned", year=2026), _osm()) == "planned"
+    assert _status(_city(status="planned"),
+                   _osm([_road(**{"cycleway:left": "lane"})])) is None
+
+
+def test_an_out_of_service_lane_is_not_listed():
+    assert _status(_city(status="out_of_service"), _osm()) is None
+
+
+def test_a_short_gap_is_not_listed():
+    # A protected-intersection corner piece.
+    assert _status(_city(length=10.0), _osm()) is None
+    assert _status(_city(length=20.0), _osm()) == "missing"
+
 
 def test_the_summary_adds_up():
-    # Three built lines, 1 km apart: 1000 m with nothing (missing, and nothing
-    # within REMOTE_M), 500 m with a sidewalk 20 m off (far), 300 m traced.
-    # Plus a proposed line, which none of the km figures may see.
-    missing = _city(1000)
-    far = _city(500, dy=1000)
-    traced = _city(300, dy=2000)
-    proposed = _city(200, status="proposed", dy=3000)
-    osm = _osm(sidewalk=[
-        _way(1, _hline(-5, 505, 1020), highway="footway", footway="sidewalk",
-             surface="concrete"),
-        _way(2, _hline(-5, 305, 2005), highway="footway", footway="sidewalk",
-             surface="concrete"),
-    ])
-    gaps, s = compare.match([missing, far, traced, proposed], osm)
-    assert [g["properties"]["status"] for g in gaps] == \
-        ["missing", "far", "proposed"]
-    assert s["city"] == 3
-    assert s["city_km"] == 1.8
-    assert s["covered_km"] == 0.3
-    assert s["untraced_km"] == 1.5
-    assert s["far_km"] == 0.5
-    assert s["remote_km"] == 1.0
-    assert s["says_no_km"] == 0
-    assert (s["missing"], s["far"], s["proposed"], s["partial"]) == (1, 1, 1, 0)
-    assert set(compare.STATUSES) <= set(s)
-
-
-def test_a_gap_feature_carries_the_city_attributes():
-    c = _city(id=123, installed=1998, surface="concrete", width=1.52)
-    gaps, _summary = compare.match([c], _osm())
-    p = gaps[0]["properties"]
-    assert p == {"status": "missing", "street": "", "length": 100,
-                 "untraced": 100, "id": 123, "installed": 1998,
-                 "surface": "concrete", "width": 1.52}
-    assert gaps[0]["type"] == "Feature"
-    assert gaps[0]["geometry"]["type"] == "LineString"
-
-
-def test_a_multiline_counts_every_part():
-    c = _city(100)
-    c["lines"].append(_hline(0, 100, 1000))
-    gaps, s = compare.match([c], _osm())
-    assert gaps[0]["properties"]["length"] == 200
-    assert s["city_km"] == 0.2
-
-
-def test_no_city_lines_is_an_empty_report():
-    gaps, s = compare.match([], _osm())
-    assert gaps == [] and s["city"] == 0 and s["city_km"] == 0
-
-
-# --- segment_status ---------------------------------------------------------
-
-@pytest.mark.parametrize("lengths, built, surfaced, expected", [
-    ({}, True, 1.0, None),
-    ({"none": 0}, True, 1.0, None),
-    # the matched boundary is inclusive
-    ({"sidewalk": 70, "none": 30}, True, 1.0, None),
-    ({"sidewalk": 69.9, "none": 30.1}, True, 1.0, "partial"),
-    # the partial boundary is inclusive
-    ({"sidewalk": 20, "none": 80}, True, 1.0, "partial"),
-    ({"sidewalk": 19, "none": 81}, True, 1.0, "missing"),
-    # the kind of cover, once matched
-    ({"footway": 80, "none": 20}, True, 1.0, "untagged"),
-    ({"road_tag": 80, "none": 20}, True, 1.0, "on_road_tag"),
-    ({"path": 80, "none": 20}, True, 1.0, None),
-    ({"sidewalk": 80, "none": 20}, True, 0.4, "nosurface"),
-    ({"sidewalk": 80, "none": 20}, True, 0.5, None),
-    ({"sidewalk": 50, "footway": 40, "none": 10}, True, 1.0, None),
-    ({"sidewalk": 30, "footway": 50, "none": 20}, True, 1.0, "untagged"),
-    # what the uncovered part has near it names the gap; half is enough
-    ({"says_no": 50, "none": 50}, True, 1.0, "road_says_no"),
-    ({"says_no": 49, "none": 51}, True, 1.0, "missing"),
-    ({"far": 50, "none": 50}, True, 1.0, "far"),
-    ({"far": 40, "none": 60}, True, 1.0, "missing"),
-    ({"says_no": 50, "far": 50}, True, 1.0, "road_says_no"),
-    ({"sidewalk": 10, "far": 50, "none": 40}, True, 1.0, "far"),
-    # not built
-    ({"sidewalk": 70, "none": 30}, False, 1.0, None),
-    ({"sidewalk": 69, "none": 31}, False, 1.0, "proposed"),
-    ({"footway": 100}, False, 1.0, None),
-    ({"none": 100}, False, 1.0, "proposed"),
-])
-def test_segment_status(lengths, built, surfaced, expected):
-    assert compare.segment_status(lengths, built, surfaced) == expected
-
-
-# --- tags -------------------------------------------------------------------
-
-@pytest.mark.parametrize("tags, expected", [
-    ({"sidewalk": "both"}, "yes"),
-    ({"sidewalk": "left"}, "yes"),
-    ({"sidewalk": "right"}, "yes"),
-    ({"sidewalk": "yes"}, "yes"),
-    ({"sidewalk:left": "yes"}, "yes"),
-    ({"sidewalk:right": "yes", "sidewalk:left": "no"}, "yes"),
-    ({"sidewalk": "separate"}, None),
-    ({"sidewalk:both": "separate"}, None),
-    ({"sidewalk:both": "no"}, "no"),
-    ({"sidewalk": "none"}, "no"),
-    ({"sidewalk": "no"}, "no"),
-    ({}, None),
-    ({"highway": "residential"}, None),
-])
-def test_road_sidewalk(tags, expected):
-    assert compare.road_sidewalk(tags) == expected
-
-
-@pytest.mark.parametrize("tags, expected", [
-    ({"highway": "footway"}, True),
-    ({"highway": "footway", "footway": "sidewalk"}, False),
-    ({"highway": "footway", "footway": "crossing"}, False),
-    ({"highway": "path"}, False),
-    ({"highway": "cycleway"}, False),
-])
-def test_is_plain_footway(tags, expected):
-    assert compare.is_plain_footway(tags) is expected
-
-
-# --- classify ---------------------------------------------------------------
-
-@pytest.mark.parametrize("osm, expected", [
-    (_osm(), "none"),
-    (_osm(sidewalk=[_way(1, _beside(14), footway="sidewalk")]), "sidewalk"),
-    (_osm(sidewalk=[_way(1, _beside(16), footway="sidewalk")]), "far"),
-    (_osm(sidewalk=[_way(1, _beside(26), footway="sidewalk")]), "none"),
-    (_osm(other=[_way(2, _beside(5), highway="footway")]), "footway"),
-    (_osm(other=[_way(2, _beside(5), highway="path")]), "path"),
-    (_osm(road=[_way(3, _beside(19), highway="residential", sidewalk="yes")]),
-     "road_tag"),
-    (_osm(road=[_way(3, _beside(21), highway="residential", sidewalk="yes")]),
-     "none"),
-    (_osm(road=[_way(3, _beside(10), highway="residential", sidewalk="no")]),
-     "says_no"),
-])
-def test_classify_one_sample(osm, expected):
-    cls, _way_ids = compare.classify(
-        shapely.points([[X0 + 50, Y0]]), osm)
-    assert list(cls) == [expected]
-
-
-def test_a_sidewalk_way_wins_over_a_nearer_footway_and_a_road():
-    osm = _osm(
-        sidewalk=[_way(1, _beside(12), footway="sidewalk")],
-        other=[_way(2, _beside(2), highway="footway")],
-        road=[_way(3, _beside(8), highway="residential", sidewalk="both")],
-    )
-    cls, ways = compare.classify(shapely.points([[X0 + 50, Y0]]), osm)
-    assert (cls[0], ways[0]) == ("sidewalk", 1)
-
-
-def test_a_pedestrian_line_wins_over_a_road_tag():
-    osm = _osm(other=[_way(2, _beside(12), highway="path")],
-               road=[_way(3, _beside(5), highway="residential", sidewalk="no")])
-    cls, ways = compare.classify(shapely.points([[X0 + 50, Y0]]), osm)
-    assert (cls[0], ways[0]) == ("path", 2)
-
-
-def test_only_the_nearest_road_speaks():
-    # A side street saying nothing sits between the sidewalk and the road
-    # that says sidewalk=both: the nearest road is the one asked.
-    osm = _osm(road=[
-        _way(3, _beside(5), highway="service"),
-        _way(4, _beside(15), highway="residential", sidewalk="both"),
-    ])
-    cls, _ways = compare.classify(shapely.points([[X0 + 50, Y0]]), osm)
-    assert cls[0] == "none"
+    lanes = [_city(), _city(dy=-6.0)]
+    lanes[1]["props"]["id"] = 8
+    osm = _osm([_road(**{"cycleway:left": "lane", "cycleway:right": "no"})])
+    gaps, s = compare.match(lanes, osm, today=TODAY)
+    assert s["lane_km"] == 0.4 and s["lane_pos_km"] == 0.2
+    assert s["lane_no_km"] == 0.2 and s["lane_absent_km"] == 0.0
+    assert s["says_no"] == 1 and s["work"] == 1
+    assert s["recent_since"] == 2025
+    assert [g["properties"]["side"] for g in gaps] == ["right"]
