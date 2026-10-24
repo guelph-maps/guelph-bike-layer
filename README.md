@@ -1,128 +1,139 @@
-# Guelph Sidewalks Layer
+# Guelph Bike Layer
 
-Turns the City of Guelph [Sidewalks](https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData2/FeatureServer/0)
-layer (~5,245 lines, 716 km built) into map-tile layers that OpenStreetMap
+Turns the City of Guelph [Bike Facilities](https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData2/FeatureServer/1)
+layer (1,514 lines, 210 km in service) into map-tile layers that OpenStreetMap
 mappers can add to the **JOSM** and **iD** editors as a reference overlay, and
-a weekly page listing the City sidewalks OSM has no line for, street by
-street.
+a weekly work list of what OSM is missing: newest City installs first, each
+row with the tag to add and a link that opens the spot in iD or JOSM.
 
-**Live layer and how to add it: https://guelph-maps.github.io/guelph-sidewalks-layer/**
+**Live layer and how to add it: https://guelph-maps.github.io/guelph-bike-layer/**
+&middot; work list: https://guelph-maps.github.io/guelph-bike-layer/gaps/
 
 Part of the [guelph-maps](https://github.com/guelph-maps) organisation, which
 indexes every Guelph project. Cloned from
-[guelph-buildings-layer](https://github.com/guelph-maps/guelph-buildings-layer),
-itself cloned from [guelph-parks-layer](https://github.com/guelph-maps/guelph-parks-layer).
-This is the family's first **line** layer: the others match points or
-polygons.
+[guelph-sidewalks-layer](https://github.com/guelph-maps/guelph-sidewalks-layer),
+the family's first line layer; this is its second.
 
 ## Why this layer
 
-An audit of the City's open data for OSM rated sidewalks low because "OSM has
-92%". That figure divided OSM's total sidewalk length by the City's (663 / 716
-km). It never asked whether they are the same sidewalks, and 42 km of OSM's
-are on campus and private sites the City does not inventory, which pads the
-ratio. Measured by location, on the first run here (2026-10-09):
+The audit put Bike Facilities at tier 4 because "OSM lacks separation" and
+233 OSM ways said `cycleway=no` on City bike streets. A side-aware match
+(`findings/recalibration.md` in
+[guelph-osm-import-audit](https://github.com/guelph-maps/guelph-osm-import-audit))
+found OSM already about 98% complete on lane presence and 80% on separation,
+leaving a backlog an afternoon could clear. What makes it worth a weekly page
+is churn: it is the fastest-changing layer the City publishes (52 rows added
+between the audit and 2026-10-09, 61 rows dated 2026 against the audit's 7).
+So the page's job is to catch new installs, and it leads with them.
 
-- **70.5 km** of the City's 715.8 km of built sidewalk has no OSM pedestrian
-  line within 15 m and no road tag claiming one; **50.7 km** has nothing
-  within 50 m.
-- It runs along streets whose roads are mapped. 100 streets have at least
-  0.2 km each, and the worst cluster by neighbourhood: Kortright Hills
-  (Deerpath Dr 3.2 km, Woodland Glen Dr 2.2, Pinnacle Cres 1.8), then West
-  Acres Dr 2.7 and Freshmeadow Way 1.9.
-- The City states 1–5 m accuracy on 5,241 of its 5,245 rows, and 8.8 km of the
-  untraced length sits 15–25 m from an OSM line, where an offset is a likelier
-  story than a missing way. So the honest headline is **~60–75 km**.
+On the first run here (City data and OSM both 2026-10-24):
 
-Guelph already maps sidewalks as separate ways (4,512 `footway=sidewalk` ways,
-against 237 roads with a positive `sidewalk=*`), so tracing them follows the
-local convention; there is no tagging question to settle first.
+- **On-road lanes:** OSM has the lane on the City's side of the road for
+  **121.6 of 124.0 km** (1.9 km of it as separate cycleways). 1.5 km has no
+  tag on that side and 0.8 km says `no` (the recalibration: 2.7 km together).
+  2.9 km of City lane line is drawn within 1.5 m of the road centreline, where
+  its side cannot be read; it is judged on any side, and its rows say so.
+- **Separation:** where the City records a buffer, OSM tags it on **18.0 of
+  22.7 km** (recalibration: 17.5 of 21.9). The rest is Downey Rd 2.1 km,
+  Victoria Rd N 1.2 and Gordon St 0.5, as the recalibration found.
+- **Signed routes:** 3.1 of 54.5 km have no `route=bicycle` relation, no
+  cycleway tag and no `bicycle=designated` on the road: Emma St 1.4 km, Hearn
+  Ave 0.8, Fountain St E 0.4, Earl St 0.35 (recalibration: 3.1 km).
+- **Off-road paths:** 0.1 of 28.4 km have no path at all; 0.5 km is on a
+  sidewalk with no bicycle access. The recalibration said 1.3 km, but it took
+  the nearest path, which for a cycle track is usually the sidewalk beside it;
+  here a cycle track looks for a cycleway within 15 m first.
+- **New installs:** of the 10.5 km the City dated 2025 or 2026, **2.4 km is
+  not in OSM** (the recalibration's 1.45 of 5.55 km counted on-road lanes
+  only). That is 15 segments, as 11 jobs: Hearn Ave and Inkerman St signed
+  routes (2026), Downey Rd's 2026 lanes, Woolwich St lanes OSM says `no` to.
+- **70 segments of work** in all (15 new, 3 missing, 6 says no, 22 no
+  separation, 8 no bikes, 16 unsigned route), which the page folds into 44
+  jobs; plus 92 crossrides and intersection pieces, shown and not counted.
 
 ## What it produces
 
-- **Vector tiles** (MVT), z14–19 &mdash; interactive in iD; click a line to
-  read its `id` (the City's SIDEWALKID), `status`, `surface`, `width` (m),
-  `installed` (year, on about a third of rows) and `length` (m).
-- **Raster tiles** (PNG), z15–18 &mdash; cyan lines for built sidewalks,
-  orange for the City's proposed ones. A tracing backdrop over aerial imagery
-  in JOSM.
-- A **landing page** with copy-paste "add this layer" instructions for both
-  editors.
-- A **gap-review page** ([`/gaps/`](https://guelph-maps.github.io/guelph-sidewalks-layer/gaps/))
-  that leads with **streets**, by untraced length, and opens each into its
-  segments on an interactive map. Segment statuses:
-  - **missing** &mdash; under 20% covered: add it;
-  - **partial** &mdash; 20–70% covered: finish it;
-  - **far** &mdash; an OSM line 15–25 m away: check the alignment before
-    adding anything;
-  - **road_says_no** &mdash; the OSM road says `sidewalk=no` where the City
-    has one (2.7 km, most of it on Whitelaw Rd);
-  - **untagged** &mdash; covered by a plain `highway=footway`: tag it
-    `footway=sidewalk`;
-  - off by default: **on_road_tag** (mapped as `sidewalk=*` on the road, a
-    valid way to map it), **proposed** (City status PROPOSED, may not be
-    poured), **nosurface** (a matched sidewalk way with no `surface=*`; the
-    City's are 99% concrete, so low value).
+- **Vector tiles** (MVT), z14&ndash;19 &mdash; interactive in iD; click a line
+  to read its `id` (the City's BIKEFACILITYID), `status`, `type`, `kind`,
+  `onroad`, `buffer`, `year`, `width`, `signed`, `street` and `length`.
+- **Raster tiles** (PNG), z14&ndash;17 &mdash; coloured by what is on the
+  ground: painted lane blue, buffered violet, separated (cycle track, curb,
+  bollards) green, multi-use path orange, signed route amber dashed,
+  crossrides pink, planned grey dashed. Out-of-service rows are not drawn.
+- A **landing page** with the colour key, copy-paste "add this layer"
+  instructions for both editors, and the tags each kind maps to.
+- A **work list** ([`/gaps/`](https://guelph-maps.github.io/guelph-bike-layer/gaps/)),
+  one row per job (the City's per-block pieces of one street that need the
+  same tag), newest install first. Each row gives the tag to add, relative to
+  the OSM way's direction, and links to iD (with the way selected), JOSM
+  (remote control: the area loaded, the way selected) and openstreetmap.org;
+  <kbd>I</kbd>, <kbd>J</kbd> and <kbd>O</kbd> do the same for the selected row.
+  Statuses:
+  - **new** &mdash; installed this year or last, and not in OSM (any of the
+    next three); listed first;
+  - **missing** &mdash; no lane tag on its side, no separate cycleway, no path;
+  - **says_no** &mdash; the OSM road says `cycleway=no` on the side the City
+    has a lane;
+  - **nosep** &mdash; the lane is in OSM but the City's curb, bollards, rumble
+    strip or painted buffer is not;
+  - **nobike** &mdash; a multi-use path or cycle track mapped as a sidewalk
+    with no bicycle access;
+  - **unsigned_route** &mdash; a signed route with no relation and no tag;
+  - off by default: **planned** (City status Planned) and **spot**
+    (crossrides, intersection treatments, curb cuts: no settled OSM tag, so
+    shown and never counted).
 
-  Its [history page](https://guelph-maps.github.io/guelph-sidewalks-layer/gaps/history.html)
-  charts the untraced length and the counts, one point per weekly run.
+  Its [history page](https://guelph-maps.github.io/guelph-bike-layer/gaps/history.html)
+  charts the counts and kilometres, one point per weekly run.
 
 All of it is published to GitHub Pages and rebuilt weekly.
 
-## What is kept
+## How the work list matches
 
-**Every line**, built or proposed. The slim step keeps six properties (see
-[`src/slim.py`](src/slim.py)): `SIDEWALKID` as `id`, `STATUS` as `status`
-(`built`, or `proposed` for PROPOSED and REQUIRED), `SURFTYPE` lower-cased as
-`surface`, the metres out of `WIDTH`, the year of `INSTALLDATE`, and
-`Shape__Length` rounded. Condition, inspection and plow-route fields are
-dropped: they are maintenance records, not anything a mapper can check.
+Overpass returns every road and path-like way in the Guelph bbox, and every
+`route=bicycle` relation with its members' geometry clipped to it (one query,
+~18,000 elements). Each City line is cut into ~5 m pieces, and each piece's
+midpoint asks:
 
-## How the gap page matches
+- **On-road lanes** (Bike Lane, Green, Contraflow, an on-road Cycle Track):
+  a separate cycleway within 12 m covers it; else the nearest road within
+  20 m is read on the piece's side &mdash; `cycleway:<side>`, then
+  `cycleway:both`, then a plain `cycleway=*` (on a oneway road, the right side
+  only). Contraflow also accepts `oneway:bicycle=no`.
+- **Off-road** (MUP, an off-road Cycle Track): a path-like way within 15 m;
+  `nobike` when it is a footway with no `bicycle=yes|designated|permissive`.
+  A cycle track checks for a cycleway, or a `cycleway:<side>=track` on the
+  road, before the sidewalk beside it.
+- **Signed routes:** a relation member within 15 m, a separate cycleway, or a
+  road with a positive cycleway value or `bicycle=designated` (how Guelph
+  mostly tags its signed shared streets).
 
-Overpass returns every road and every pedestrian way in the Guelph bbox (one
-query, `out tags geom`, ~30,000 ways). Each City sidewalk is cut into pieces
-of ~5 m and each piece's midpoint asks, in this order:
+A road or cycleway only answers when its direction agrees with the City
+line's within 30°: at an intersection the nearest road is often the cross
+street. A segment is in OSM at &ge;70% covered (by length); otherwise it is a
+gap, named by what most of its uncovered length says. Gaps under 15 m (the
+corner pieces of protected intersections) are not listed. The full rule is in
+[`src/compare.py`](src/compare.py)'s docstring; matching runs in UTM 17N
+metres with shapely's STRtree and takes about a second; the Overpass
+fetch takes ~40 s.
 
-1. a `footway=sidewalk` way within 15 m &mdash; covered;
-2. any other pedestrian line within 15 m (a plain footway, path, cycleway, a
-   crossing) &mdash; covered;
-3. the nearest road within 20 m with a positive `sidewalk=*` &mdash; covered;
-4. that road saying `sidewalk=no` &mdash; a contradiction;
-5. a pedestrian line 15–25 m away &mdash; far;
-6. nothing.
+Rows are named after the nearest named OSM road, so the City's spelling slips
+("Wyndham Street Souuth") do not reach the page; they were reported to the
+City on 2026-10-12.
 
-A segment is matched at ≥70% covered (by length), partial at 20–70%, and a
-gap below that, named by what most of its uncovered length has near it. The
-full rule is in [`src/compare.py`](src/compare.py)'s docstring. Matching runs
-in UTM 17N metres with shapely's STRtree; a full compare takes ~10 s.
-
-Each gap segment is named after the OSM road nearest most of its untraced
-length, within 40 m. The audit named them after the City's street centrelines
-instead, which is why it counted 97 streets with ≥0.2 km and this counts 100;
-the ranking is the same.
-
-The first run reproduced the audit's recalibration exactly: 362 segments under
-20% covered (318 missing, 23 far, 21 road_says_no), and 67.8 km untraced once
-`road_says_no` is set aside (the recalibration: 67.7).
-
-It runs one way only. An OSM sidewalk with no City sidewalk beside it is not
-reported: campus, private sites and plazas are in OSM and not in the City's
-inventory, and that is not a gap.
+It runs one way only. An OSM cycleway the City does not inventory (campus,
+private sites) is not reported.
 
 The Overpass handling (mirror list, retries, refusing stale or implausibly
-small replies, the cache fallback, exit code 70) is the parks layer's; its
-README explains each piece. One tightening: a reply that carries no
-`timestamp_osm_base` at all, or one with no time zone, is refused too, rather than dated today.
-`OSM_MIN_ELEMENTS` in [`src/config.py`](src/config.py) is 15,000, about half
-the first live reply (30,494 ways on 2026-10-09).
+small replies, the cache fallback, exit code 70) is the parks layer's, by way
+of sidewalks; its README explains each piece. A reply must carry a
+`timestamp_osm_base` with a time zone, within 3 days, at least 9,000 elements
+(`OSM_MIN_ELEMENTS`, half the first reply) and at least 8 bicycle route
+relations (`OSM_MIN_ROUTES`, half of 17): a reply whose relation half came
+back empty would otherwise call every signed route unsigned.
 
-The City's service caps a reply at 1,000 rows, so unlike its siblings the
-download pages through the layer, and refuses to save if the total differs
-from the service's own count.
-
-There is no `backfill` command; the history starts with the first weekly
-build.
+The download pages through the City's 1,000-row cap and refuses to save if
+the total differs from the service's own count.
 
 ## Setup
 
@@ -131,10 +142,8 @@ build.
    pip install -r requirements.txt
    ```
    `addressvault` is the local link-gate package the sibling projects share; it
-   is not on PyPI. Unlike its siblings this project needs **shapely 2, numpy
-   and pyproj**: matching ~143,000 five-metre samples against ~30,000 OSM ways
-   wants a spatial index and a metric projection, which the polygon siblings
-   could hand-roll and a line matcher cannot cheaply.
+   is not on PyPI. Like the sidewalks layer, this needs **shapely 2, numpy and
+   pyproj** for the spatial index and the metric projection.
 2. On Windows, set up WSL2 + tippecanoe once &mdash; see
    [wsl-setup.md](wsl-setup.md). Elsewhere, install tippecanoe (2.49+) and the
    vector step runs it directly.
@@ -142,12 +151,12 @@ build.
 ## Usage
 
 ```
-python run.py download   # fetch the Sidewalks layer, page by page (smart-cached)
+python run.py download   # fetch the Bike Facilities layer, page by page (smart-cached)
 python run.py slim       # reduce to a slim GeoJSONL
-python run.py compare    # diff City sidewalks against OSM -> data/gaps.geojson
+python run.py compare    # diff City facilities against OSM -> data/gaps.geojson
 python run.py vector     # build vector (MVT) tiles via tippecanoe
 python run.py raster     # build line raster (PNG) tiles
-python run.py site       # render the landing page (+ the gap-review page)
+python run.py site       # render the landing page (+ the work list and history)
 python run.py publish    # force-push the site to the gh-pages branch
 
 python run.py build      # download + slim + compare + vector + raster + site
@@ -155,15 +164,18 @@ python run.py update     # build + publish  (the scheduled entry point)
 ```
 
 Build output lands in `build/site/`; that directory is what gets published.
-A full build on 2026-10-09: 15,394 vector tiles in ~2 min, 4,964 raster tiles
-in ~20 s.
+The first full build (2026-10-24): 5,963 vector tiles and 1,104 raster tiles,
+about two minutes in all.
 
 ## Scheduling (Windows)
 
 ```powershell
-.\schedule-add.ps1       # registers a weekly task "kk-GuelphSidewalksLayer", Saturdays 16:30
+.\schedule-add.ps1       # registers a weekly task "kk-GuelphBikeLayer", Thursdays 19:30
 .\schedule-remove.ps1    # unregisters it
 ```
+
+Thursday, not Wednesday: Wednesday 19:30 went to toronto-poster-columns-layer
+the same day, and the slots exist so no two builds drive tippecanoe at once.
 
 ## Tests
 
@@ -173,14 +185,14 @@ pytest
 
 ## Licence / attribution
 
-Sidewalk data is &copy; City of Guelph, published under the
+Bike facility data is &copy; City of Guelph, published under the
 [Open Government Licence &ndash; City of Guelph](https://gismaps.guelph.ca/Images/OpenDataLicenceVersion2.pdf).
 The OSMF Licence Working Group approved that licence as `compatible` on
 2024-09-09.
 
 **This project redistributes City data** — as published tiles on a public URL
 — and the licence attaches a required attribution to that. The landing page,
-the gap page and the history page all carry, visibly:
+the work list and the history page all carry, visibly:
 
 > Contains information licensed under the Open Government Licence – City of Guelph.
 
@@ -188,8 +200,8 @@ linked to the licence text. The same attribution is embedded in the vector tile
 metadata. This is a condition of use, not a courtesy: if you fork this, the
 notice travels with it.
 
-Being able to trace from this layer is not the same as being cleared to
-bulk-import it. Tracing sidewalks one at a time into OSM, by a mapper checking
-imagery, is ordinary mapping with an approved source. A scripted import of the
-missing segments would be an import, and would need its own proposal under the
-[import guidelines](https://wiki.openstreetmap.org/wiki/Import/Guidelines).
+Being able to map from this layer is not the same as being cleared to
+bulk-import it. Adding a lane or a buffer at a time, by a mapper checking
+imagery or the street, is ordinary mapping with an approved source. A scripted
+upload of the City's tags would be an import, and would need its own proposal
+under the [import guidelines](https://wiki.openstreetmap.org/wiki/Import/Guidelines).
