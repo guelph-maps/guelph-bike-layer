@@ -223,23 +223,12 @@
     };
   }
 
-  // JOSM listens on loopback; a page served over https may still call it.
-  // no-cors: the reply is opaque, but a refused connection still rejects.
-  function openJosm(url, link) {
-    fetch(url, { mode: "no-cors" }).then(function () {
-      flash(link, "sent");
-    }, function () {
-      flash(link, "JOSM?");
-      alert("JOSM did not answer. Start JOSM and enable Preferences > " +
-            "Remote Control, then try again.");
-    });
-  }
-
-  function flash(link, text) {
-    if (!link) { return; }
-    var old = link.textContent;
-    link.textContent = text;
-    setTimeout(function () { link.textContent = old; }, 1500);
+  // JOSM remote control is opened as a plain navigation in one reused tab
+  // named "josm", not fetched: browsers gate background requests from a
+  // public page to localhost, but not a link the mapper clicks. The tab shows
+  // JOSM's "OK", or a connection error when JOSM or its remote control is off.
+  function openJosm(url) {
+    window.open(url, "josm");
   }
 
   function linksHtml(job) {
@@ -247,7 +236,7 @@
     if (!t) { return '<span class="osm-blank">&mdash;</span>'; }
     var h = '<a href="' + esc(t.id) + '" target="_blank" rel="noopener" ' +
       'title="Open here in the iD editor (hotkey: I)">iD</a> &middot; ' +
-      '<a href="' + esc(t.josm) + '" class="josm" ' +
+      '<a href="' + esc(t.josm) + '" class="josm" target="josm" ' +
       'title="Load this area into JOSM via remote control (hotkey: J)">JOSM</a> &middot; ' +
       '<a href="' + esc(t.osm) + '" target="_blank" rel="noopener" ' +
       'title="View on openstreetmap.org (hotkey: O)">OSM</a>';
@@ -309,21 +298,9 @@
     tbody.innerHTML = html.join("");
 
     tbody.addEventListener("click", function (ev) {
-      var a = ev.target.closest("a");
-      if (a) {
-        if (a.classList.contains("josm")) {
-          ev.preventDefault();
-          openJosm(a.href, a);
-        }
-        return;  // let the other links work
-      }
+      if (ev.target.closest("a")) { return; }  // links open themselves
       var tr = ev.target.closest("tr");
       if (tr) { select(parseInt(tr.dataset.j, 10), true); }
-    });
-    // Popups are built on the map, outside the table: same JOSM handling.
-    document.getElementById("gap-map").addEventListener("click", function (ev) {
-      var a = ev.target.closest && ev.target.closest("a.josm");
-      if (a) { ev.preventDefault(); openJosm(a.href, a); }
     });
   }
 
@@ -415,7 +392,7 @@
       if (!t) { return; }
       ev.preventDefault();
       if (key === "j") {
-        openJosm(t.josm, selectedRow && selectedRow.querySelector("a.josm"));
+        openJosm(t.josm);
       } else {
         window.open(key === "o" ? t.osm : t.id, "_blank", "noopener");
       }
