@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guelph Bike Facilities &mdash; OSM Gaps</title>
+<link rel="stylesheet" href="../index.css">
+<link rel="stylesheet" href="gaps.css">
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="">
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script defer src="gaps.js"></script>
+<script data-goatcounter="https://osm-guelph.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</head>
+<body class="app">
+
+<header class="bar">
+  <div class="bar-head">
+    <h1>Guelph Bike Facilities &mdash; what OSM is missing</h1>
+    <a class="back" href="../">&larr; reference layer</a>
+    <a class="back" href="history.html">gaps over time &rarr;</a>
+  </div>
+  <div class="counts">
+    <div class="count headline new"><strong>15</strong><span>new City installs (2025+) not in OSM</span></div>
+    <div class="count missing"><strong>3</strong><span>missing</span></div>
+    <div class="count says_no"><strong>6</strong><span>OSM says no</span></div>
+    <div class="count nosep"><strong>22</strong><span>no separation</span></div>
+    <div class="count nobike"><strong>8</strong><span>footway, no bikes</span></div>
+    <div class="count unsigned_route"><strong>16</strong><span>unsigned route</span></div>
+    <div class="count spot"><strong>92</strong><span>crossrides etc. (not counted)</span></div>
+    <div class="count meta-count">City data 2026-10-29 &middot; OSM data 2026-10-24 23:18Z &middot; compared 2026-10-29</div>
+  </div>
+  <p class="stale">Overpass could not be reached for this build, so these gaps were computed against OSM data from <strong>2026-10-24 23:18Z</strong>. Anything mapped since then still shows as a gap.</p>
+  <p class="note">
+    OSM has 121.6 of the City's 124.0&nbsp;km of on-road lane
+    on the right side of the road, and the buffer on 18.0 of the
+    22.7&nbsp;km where the City records one. Of what the City
+    installed since 2025, 2.4 of
+    10.5&nbsp;km is not in OSM yet. 2.9&nbsp;km of City
+    lane is drawn on the road centreline, where its side cannot be read: those
+    are judged on any side, and their rows say so.
+  </p>
+  <p class="licence">
+    <a href="https://gismaps.guelph.ca/Images/OpenDataLicenceVersion2.pdf">Contains information licensed under the Open Government Licence – City of Guelph.</a>
+    Source: <a href="https://gismaps.guelph.ca/hosting/rest/services/OpenData/OpenData2/FeatureServer/1">Bike Facilities</a>.
+  </p>
+</header>
+
+<div class="layout">
+  <div id="gap-map"
+       data-geojson="gaps.geojson"
+       data-raster="../tiles/raster/{z}/{x}/{y}.png"
+       data-raster-minzoom="14"
+       data-raster-maxzoom="17"></div>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <div class="controls">
+        <label title="Installed 2025 or later, and not in OSM"><span class="swatch new"></span>
+          <input type="checkbox" id="show-new" checked> New</label>
+        <label title="Not in OSM: no lane tag on its side, no path, no separate cycleway"><span class="swatch missing"></span>
+          <input type="checkbox" id="show-missing" checked> Missing</label>
+        <label title="The OSM road says cycleway=no on the side the City has a lane"><span class="swatch says_no"></span>
+          <input type="checkbox" id="show-says_no" checked> Says no</label>
+        <label title="In OSM, but the City's curb, bollards or painted buffer is not tagged"><span class="swatch nosep"></span>
+          <input type="checkbox" id="show-nosep" checked> No separation</label>
+        <label title="A multi-use path mapped as a footway with no bicycle access"><span class="swatch nobike"></span>
+          <input type="checkbox" id="show-nobike" checked> No bikes</label>
+        <label title="A City signed route with no OSM route=bicycle relation and no cycleway tag"><span class="swatch unsigned_route"></span>
+          <input type="checkbox" id="show-unsigned_route" checked> Unsigned route</label>
+        <label title="City status Planned: not built yet (0 segments)"><span class="swatch planned"></span>
+          <input type="checkbox" id="show-planned"> Planned</label>
+        <label title="Crossrides, intersection treatments and curb cuts: no settled OSM tag, so shown and not counted (92)"><span class="swatch spot"></span>
+          <input type="checkbox" id="show-spot"> Crossrides etc.</label>
+        <input type="search" id="filter" placeholder="Filter by street, type, tag or id...">
+      </div>
+      <p class="hint">
+        Newest City installs first. Each row says what to add and where:
+        <strong>iD</strong> opens the editor there (with the OSM way selected
+        when there is one), <strong>JOSM</strong> loads the area into a
+        running JOSM through remote control. Click a row to see it on the
+        map, then press <kbd>I</kbd> for iD, <kbd>J</kbd> for JOSM or
+        <kbd>O</kbd> for openstreetmap.org. <code>left</code> and
+        <code>right</code> are relative to the direction of the OSM way.
+        Coloured lines from z14 are the City's own layer;
+        check current imagery before adding anything.
+      </p>
+    </div>
+    <div class="table-scroll">
+      <table id="gap-table">
+        <thead>
+          <tr><th>Year</th><th class="col-name">Street &middot; facility &middot; tag to add</th>
+              <th>Status</th><th>Open</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </aside>
+</div>
+
+</body>
+</html>
