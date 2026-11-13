@@ -1,0 +1,3 @@
+{"date": "2026-10-24", "osm_date": "2026-10-24 23:18Z", "source": "live", "work": 70, "new": 15, "missing": 3, "says_no": 6, "nosep": 22, "nobike": 8, "unsigned_route": 16, "lane_absent_km": 1.5, "lane_no_km": 0.8, "recent_gap_km": 2.4, "city_km": 206.9}
+{"date": "2026-11-05", "osm_date": "2026-11-06 00:28Z", "source": "live", "work": 51, "new": 9, "missing": 2, "says_no": 7, "nosep": 22, "nobike": 8, "unsigned_route": 3, "lane_absent_km": 1.5, "lane_no_km": 0.9, "recent_gap_km": 1.5, "city_km": 206.9}
+{"date": "2026-11-12", "osm_date": "2026-11-13 00:29Z", "source": "live", "work": 51, "new": 9, "missing": 2, "says_no": 7, "nosep": 22, "nobike": 8, "unsigned_route": 3, "lane_absent_km": 1.5, "lane_no_km": 0.9, "recent_gap_km": 1.5, "city_km": 206.9}
