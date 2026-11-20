@@ -119,6 +119,19 @@ def _write_cache(data=GOOD, sidecar=None):
 
 # --- mirrors and rounds -----------------------------------------------------
 
+def test_configured_mirrors_are_tried_in_order(paths, monkeypatch):
+    post = _post({"overpass-api.de": FakeResponse(status=504),
+                  "overpass.private.coffee": FakeResponse(status=504),
+                  "maps.mail.ru": FakeResponse(GOOD)})
+    monkeypatch.setattr(compare.requests, "post", post)
+
+    _data, _date, from_cache = compare._load_osm()
+
+    assert from_cache is False
+    assert _hosts(post) == ["overpass-api.de", "overpass.private.coffee",
+                            "maps.mail.ru"]
+
+
 def test_a_dead_primary_falls_through_to_the_next_mirror(paths, monkeypatch):
     monkeypatch.setattr(config, "OVERPASS_URLS",
                         ("https://a.example/api", "https://b.example/api"))
@@ -230,8 +243,8 @@ def test_a_reply_from_months_old_data_is_not_accepted(paths, monkeypatch):
 
 
 @pytest.mark.parametrize("age, accepted", [
-    (timedelta(days=config.OSM_MAX_AGE_DAYS) - timedelta(hours=1), True),
-    (timedelta(days=config.OSM_MAX_AGE_DAYS) + timedelta(hours=1), False),
+    (timedelta(hours=71), True),
+    (timedelta(hours=73), False),
 ])
 def test_the_age_limit(paths, monkeypatch, age, accepted):
     monkeypatch.setattr(compare.requests, "post",

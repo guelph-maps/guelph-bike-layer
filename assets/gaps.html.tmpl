@@ -31,6 +31,7 @@
     <div class="count nosep"><strong>{{NOSEP_COUNT}}</strong><span>no separation</span></div>
     <div class="count nobike"><strong>{{NOBIKE_COUNT}}</strong><span>footway, no bikes</span></div>
     <div class="count unsigned_route"><strong>{{UNSIGNED_COUNT}}</strong><span>unsigned route</span></div>
+    <div class="count legacy_route"><strong>{{LEGACY_ROUTE_COUNT}}</strong><span>legacy route migration</span></div>
     <div class="count spot"><strong>{{SPOT_COUNT}}</strong><span>crossrides etc. (not counted)</span></div>
     <div class="count meta-count">City data {{DATA_DATE}} &middot; OSM data {{OSM_DATE}} &middot; compared {{BUILD_DATE}}</div>
   </div>
@@ -72,6 +73,8 @@
           <input type="checkbox" id="show-nobike" checked> No bikes</label>
         <label title="A City signed route with no OSM route=bicycle relation and no cycleway tag"><span class="swatch unsigned_route"></span>
           <input type="checkbox" id="show-unsigned_route" checked> Unsigned route</label>
+        <label title="A City signed route represented by legacy lcn=yes tags; migrate to a route=bicycle relation"><span class="swatch legacy_route"></span>
+          <input type="checkbox" id="show-legacy_route" checked> Legacy route migration</label>
         <label title="City status Planned: not built yet ({{PLANNED_COUNT}} segments)"><span class="swatch planned"></span>
           <input type="checkbox" id="show-planned"> Planned</label>
         <label title="Crossrides, intersection treatments and curb cuts: no settled OSM tag, so shown and not counted ({{SPOT_COUNT}})"><span class="swatch spot"></span>

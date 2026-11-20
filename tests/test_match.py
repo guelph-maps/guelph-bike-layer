@@ -311,6 +311,10 @@ def test_a_signed_route_tagged_designated_on_the_road_is_not_listed():
     assert _status(_route(), _osm([road])) is None
 
 
+def test_a_signed_route_tagged_lcn_yes_on_the_road_is_covered():
+    assert _status(_route(), _osm([_road(lcn="yes")])) is None
+
+
 def test_a_signed_route_with_nothing_is_unsigned():
     p = _one(_route(), _osm([_road()]))
     assert p["status"] == "unsigned_route"

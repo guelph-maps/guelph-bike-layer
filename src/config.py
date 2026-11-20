@@ -157,14 +157,11 @@ PATH_HIGHWAYS = (
     "bridleway", "corridor",
 )
 
-# The mirror list is the parks layer's, for the parks layer's reasons:
-# overpass.kumi.systems and overpass.private.coffee have both been caught
-# serving months-stale data, which looks exactly like success (private.coffee
-# answered the recalibration with a 2026-05-31 base). OSM_MAX_AGE_DAYS refuses
-# such a reply from any mirror: the gap page asserts timestamp_osm_base, not
-# merely that the request came back.
+# Private.coffee has served months-stale data; OSM_MAX_AGE_DAYS rejects stale
+# replies from every mirror. The mirrors are tried in the order listed.
 OVERPASS_URLS = (
     "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 )
 OVERPASS_TIMEOUT = 600

@@ -1,4 +1,4 @@
-addressvault
+addressvault @ git+https://github.com/skfd/address-vault.git@11fda6e141062b935acf8b449e99bcffd790a122
 layerkit
 requests
 Pillow

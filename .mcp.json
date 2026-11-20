@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "osmTaggingSchema": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "source \"$HOME/.nvm/nvm.sh\" >/dev/null 2>&1 && nvm use 26 --silent >/dev/null 2>&1 && exec npx --yes @gander-tools/osm-tagging-schema-mcp@3.11.0"
+      ]
+    }
+  }
+}

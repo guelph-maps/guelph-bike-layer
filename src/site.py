@@ -110,6 +110,7 @@ def _build_gaps_page(build_date):
         "{{NOSEP_COUNT}}": f"{summary.get('nosep', 0):,}",
         "{{NOBIKE_COUNT}}": f"{summary.get('nobike', 0):,}",
         "{{UNSIGNED_COUNT}}": f"{summary.get('unsigned_route', 0):,}",
+        "{{LEGACY_ROUTE_COUNT}}": f"{summary.get('legacy_route', 0):,}",
         "{{PLANNED_COUNT}}": f"{summary.get('planned', 0):,}",
         "{{SPOT_COUNT}}": f"{summary.get('spot', 0):,}",
         **{"{{" + k.upper() + "}}": f"{summary.get(k, 0):,}"

@@ -1,8 +1,13 @@
 # WSL2 + tippecanoe setup (one time)
 
+This guide is for Windows hosts only. On native Linux, including apt-installed
+VS Code, install tippecanoe on the host and use the Linux commands in
+[README.md](README.md#setup); neither WSL nor a Flatpak wrapper is needed.
+
 The vector tile step (`python run.py vector`) builds Mapbox Vector Tiles with
 **tippecanoe**, which has no native Windows build. It runs inside WSL2 / Ubuntu.
 This is a one-time setup; after it, the weekly build drives WSL automatically.
+Windows examples assume the project's Python environment is activated.
 
 ## 1. Install WSL2 (skip if already installed)
 

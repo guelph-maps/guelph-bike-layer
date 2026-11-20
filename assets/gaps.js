@@ -14,21 +14,22 @@
 
   // Order is the checkbox / count-chip order. Default-on statuses first.
   var STATUSES = ["new", "missing", "says_no", "nosep", "nobike",
-                  "unsigned_route", "planned", "spot"];
+                  "unsigned_route", "legacy_route", "planned", "spot"];
   var COLORS = {
     new: "#c2255c", missing: "#f08c00", says_no: "#e03131", nosep: "#1098ad",
-    nobike: "#7048e8", unsigned_route: "#66a80f", planned: "#868e96",
-    spot: "#adb5bd",
+    nobike: "#7048e8", unsigned_route: "#66a80f", legacy_route: "#9c36b5",
+    planned: "#868e96", spot: "#adb5bd",
   };
   var LABELS = {
     new: "new", missing: "missing", says_no: "OSM says no",
     nosep: "no separation", nobike: "no bikes",
-    unsigned_route: "unsigned route", planned: "planned", spot: "not counted",
+    unsigned_route: "unsigned route", legacy_route: "legacy route migration",
+    planned: "planned", spot: "not counted",
   };
   // Jobs sort by status rank first only to keep "new" on top; within the
   // work statuses it is the install year that orders the list.
   var RANK = { new: 0, missing: 1, says_no: 1, nosep: 1, nobike: 1,
-               unsigned_route: 1, planned: 2, spot: 3 };
+               unsigned_route: 1, legacy_route: 2, planned: 3, spot: 4 };
   var WEIGHT = 5, SELECTED_WEIGHT = 9;
   // Metres of padding around a job for the JOSM download box.
   var PAD_M = 40;
